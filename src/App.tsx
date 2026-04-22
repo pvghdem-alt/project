@@ -19,17 +19,35 @@ import {
   Save,
   Menu,
   X,
-  User,
+  User as UserIcon,
   Info,
   Send,
   Loader2,
   Sparkles,
   ClipboardList,
-  RotateCcw
+  RotateCcw,
+  Key,
+  Plus,
+  LogIn,
+  LogOut
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { DESIGN_SPECS } from './constants';
-import { askAiAssistant } from './geminiService';
+import { askAiAssistant, setCustomApiKey } from './geminiService';
+import { auth, db, loginWithGoogle, logout } from './lib/firebase';
+import { 
+  collection, 
+  query, 
+  onSnapshot, 
+  addDoc, 
+  updateDoc, 
+  deleteDoc, 
+  doc, 
+  orderBy,
+  serverTimestamp,
+  type Timestamp
+} from 'firebase/firestore';
+import { onAuthStateChanged, type User } from 'firebase/auth';
 
 type FloorKey = 'B3F' | 'B5F';
 
@@ -54,6 +72,20 @@ export default function App() {
   const [notes, setNotes] = useState<Note[]>([]);
   const [newNote, setNewNote] = useState('');
   
+  // Custom Topics
+  const [customTopics, setCustomTopics] = useState<string[]>(['護理站', '一般病房', '保護室', '公共活動區']);
+  const [showAddTopic, setShowAddTopic] = useState(false);
+  const [newTopicName, setNewTopicName] = useState('');
+
+  // Auth State
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  // API Key state
+  const [apiKey, setApiKey] = useState('');
+  const [isApiKeySet, setIsApiKeySet] = useState(false);
+  const [showApiModal, setShowApiModal] = useState(false);
+
   // Chat state
   const [chatInput, setChatInput] = useState('');
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -66,18 +98,101 @@ export default function App() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
 
-  const handleAddNote = () => {
-    if (!newNote.trim() || !selectedSpace) return;
-    const note: Note = {
-      id: Date.now().toString(),
+  // Auth Listener
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setAuthLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Firestore Sync: Notes
+  useEffect(() => {
+    if (!user) {
+      setNotes([]);
+      return;
+    }
+    const q = query(collection(db, 'notes'), orderBy('timestamp', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Note[];
+      setNotes(data);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  // Firestore Sync: Topics
+  useEffect(() => {
+    if (!user) return;
+    const q = query(collection(db, 'topics'), orderBy('createdAt', 'asc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => doc.data().name);
+      const defaultTopics = ['護理站', '一般病房', '保護室', '公共活動區'];
+      setCustomTopics([...defaultTopics, ...data]);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  const handleAddNote = async () => {
+    if (!newNote.trim() || !selectedSpace || !user) return;
+    const noteData = {
       floor: activeFloor,
       space: selectedSpace,
       content: newNote,
-      timestamp: new Date().toLocaleString(),
-      status: 'pending'
+      timestamp: new Date().toLocaleString(), // Keep local string for UI but could use serverTimestamp
+      status: 'pending',
+      authorId: user.uid
     };
-    setNotes([note, ...notes]);
-    setNewNote('');
+    try {
+      await addDoc(collection(db, 'notes'), noteData);
+      setNewNote('');
+    } catch (err) {
+      console.error("Error adding note:", err);
+    }
+  };
+
+  const handleToggleNoteStatus = async (id: string, currentStatus: string) => {
+    try {
+      const noteRef = doc(db, 'notes', id);
+      await updateDoc(noteRef, { status: currentStatus === 'confirmed' ? 'pending' : 'confirmed' });
+    } catch (err) {
+      console.error("Error updating note:", err);
+    }
+  };
+
+  const handleDeleteNote = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'notes', id));
+    } catch (err) {
+      console.error("Error deleting note:", err);
+    }
+  };
+
+  const handleAddTopic = async () => {
+    if (newTopicName.trim() && !customTopics.includes(newTopicName.trim()) && user) {
+      try {
+        await addDoc(collection(db, 'topics'), {
+          name: newTopicName.trim(),
+          createdAt: serverTimestamp(),
+          creatorId: user.uid
+        });
+        setNewTopicName('');
+        setShowAddTopic(false);
+      } catch (err) {
+        console.error("Error adding topic:", err);
+      }
+    }
+  };
+
+  const handleSetApiKey = () => {
+    if (apiKey.trim()) {
+      setCustomApiKey(apiKey.trim());
+      setIsApiKeySet(true);
+      setShowApiModal(false);
+    }
   };
 
   const handleAiQuery = async () => {
@@ -153,15 +268,45 @@ export default function App() {
           />
         </nav>
 
-        <div className="p-4 border-t border-slate-800">
-          <div className={`flex items-center gap-3 p-3 rounded-xl bg-white/5 ${!sidebarOpen && 'justify-center'}`}>
-            <div className="w-8 h-8 rounded-full bg-teal-500/20 flex items-center justify-center text-teal-400 font-bold">
-              <User size={16} />
-            </div>
-            {sidebarOpen && (
-              <div className="overflow-hidden">
-                <p className="text-sm font-medium truncate text-slate-200">工程承辦人</p>
-                <p className="text-[10px] text-teal-500/60 font-mono tracking-tighter uppercase">Discussion Mode</p>
+        <div className="p-4 border-t border-slate-800 space-y-4">
+          <button 
+            onClick={() => setShowApiModal(true)}
+            className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all ${isApiKeySet ? 'bg-teal-500/10 text-teal-400 border border-teal-500/30' : 'bg-white/5 text-slate-400 border border-transparent hover:bg-white/10'} ${!sidebarOpen && 'justify-center'}`}
+          >
+            <Key size={18} />
+            {sidebarOpen && <span className="text-xs font-bold uppercase tracking-widest">{isApiKeySet ? 'API Key 已設定' : '設定 API Key'}</span>}
+          </button>
+          
+          <div className="flex flex-col gap-2">
+            {!user ? (
+              <button 
+                onClick={() => loginWithGoogle()}
+                className={`w-full flex items-center gap-3 p-3 rounded-xl bg-teal-500 text-black font-bold transition-all hover:bg-teal-400 ${!sidebarOpen && 'justify-center'}`}
+              >
+                <LogIn size={18} />
+                {sidebarOpen && <span className="text-xs uppercase tracking-widest">登入儲存</span>}
+              </button>
+            ) : (
+              <div className={`p-3 rounded-xl bg-white/5 space-y-3 ${!sidebarOpen && 'flex justify-center'}`}>
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-full bg-teal-500/20 flex items-center justify-center text-teal-400 font-bold overflow-hidden">
+                    {user.photoURL ? <img src={user.photoURL} alt="User" /> : <UserIcon size={16} />}
+                  </div>
+                  {sidebarOpen && (
+                    <div className="overflow-hidden">
+                      <p className="text-sm font-medium truncate text-slate-200">{user.displayName || '使用者'}</p>
+                      <p className="text-[10px] text-teal-500/60 font-mono tracking-tighter uppercase">Cloud Synced</p>
+                    </div>
+                  )}
+                </div>
+                {sidebarOpen && (
+                  <button 
+                    onClick={() => logout()}
+                    className="w-full flex items-center justify-center gap-2 py-1.5 text-[10px] text-slate-500 hover:text-red-400 hover:bg-red-500/5 rounded border border-transparent transition-all"
+                  >
+                    <LogOut size={12} /> 登出帳號
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -198,67 +343,80 @@ export default function App() {
         {/* Workspace */}
         <div className="flex-1 flex overflow-hidden">
           {/* Left: Interactive Viewer */}
-          <div className="flex-1 overflow-auto bg-brand-bg p-6 flex flex-col">
-            <div className="glass-panel rounded-2xl overflow-hidden relative flex-1 flex flex-col">
+          <div className="flex-1 overflow-auto bg-brand-bg p-6 flex flex-col gap-6">
+            <div className="glass-panel rounded-2xl overflow-hidden relative flex-[2] flex flex-col">
               <div className="p-4 border-b border-slate-800 flex justify-between items-center z-10 bg-slate-900/40">
                  <div className="flex bg-slate-800/50 p-1 rounded">
                     <button className="text-[10px] font-bold px-4 py-1.5 rounded bg-teal-500 text-black uppercase tracking-widest">配置圖</button>
                     <button className="text-[10px] font-bold px-4 py-1.5 rounded text-slate-400 hover:text-slate-200 uppercase tracking-widest">工程標示</button>
                  </div>
                  <div className="flex items-center gap-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                    <Info size={12} /> Click map to open space detail
+                    <Info size={12} /> 圖面檢視
                  </div>
               </div>
-              <div className="flex-1 relative overflow-auto p-8 flex items-center justify-center">
-                <div className="relative w-full h-full opacity-90 hover:opacity-100 transition-opacity min-h-[500px]">
+              <div className="flex-1 relative overflow-auto p-4 flex items-center justify-center">
+                <div className="relative w-full h-full opacity-90 transition-opacity">
                   {floorData.viewerUrl ? (
                     <iframe 
                       src={floorData.viewerUrl}
-                      className="w-full h-full border-0 rounded-lg min-h-[600px]"
+                      className="w-full h-full border-0 rounded-lg"
                       title={`${activeFloor} 3D Floor Plan`}
                     />
                   ) : (
                     <img 
                       src={floorData.image} 
                       alt={`${activeFloor} Floor Plan`}
-                      className="w-full h-auto object-contain cursor-crosshair transition-transform"
+                      className="w-full h-auto object-contain transition-transform"
                       referrerPolicy="no-referrer"
                     />
                   )}
-                  
-                  {/* Hotspots for B3F */}
-                  {activeFloor === 'B3F' && (
-                    <div className={floorData.viewerUrl ? "pointer-events-none absolute inset-0" : ""}>
-                      <div className={`absolute top-[35%] left-[45%] ${floorData.viewerUrl ? "pointer-events-auto" : ""}`}>
-                        <Hotspot label="護理站" onClick={() => setSelectedSpace('護理站')} />
-                      </div>
-                      <div className={`absolute top-[45%] left-[25%] ${floorData.viewerUrl ? "pointer-events-auto" : ""}`}>
-                        <Hotspot label="一般病房區域" onClick={() => setSelectedSpace('一般病房')} />
-                      </div>
-                      <div className={`absolute top-[55%] left-[55%] ${floorData.viewerUrl ? "pointer-events-auto" : ""}`}>
-                        <Hotspot label="日光室" onClick={() => setSelectedSpace('公共活動區')} />
-                      </div>
-                      <div className={`absolute top-[35%] left-[15%] ${floorData.viewerUrl ? "pointer-events-auto" : ""}`}>
-                        <Hotspot label="4人房" onClick={() => setSelectedSpace('一般病房')} />
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Hotspots for B5F */}
-                  {activeFloor === 'B5F' && (
-                    <div className={floorData.viewerUrl ? "pointer-events-none absolute inset-0" : ""}>
-                      <div className={`absolute top-[42%] left-[48%] ${floorData.viewerUrl ? "pointer-events-auto" : ""}`}>
-                        <Hotspot label="護理站 (B5)" onClick={() => setSelectedSpace('護理站')} />
-                      </div>
-                      <div className={`absolute top-[18%] left-[32%] ${floorData.viewerUrl ? "pointer-events-auto" : ""}`}>
-                        <Hotspot label="保護室" color="red" onClick={() => setSelectedSpace('保護室')} />
-                      </div>
-                      <div className={`absolute top-[35%] right-[28%] ${floorData.viewerUrl ? "pointer-events-auto" : ""}`}>
-                        <Hotspot label="多功能教室" onClick={() => setSelectedSpace('公共活動區')} />
-                      </div>
-                    </div>
-                  )}
                 </div>
+              </div>
+            </div>
+
+            {/* Topic List */}
+            <div className="flex-1 glass-panel rounded-2xl p-6 overflow-hidden flex flex-col">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">討論事項列表</h3>
+                <button 
+                  onClick={() => setShowAddTopic(!showAddTopic)}
+                  className="p-1.5 hover:bg-white/5 rounded text-teal-500 transition-colors"
+                >
+                  <Plus size={18} />
+                </button>
+              </div>
+
+              {showAddTopic && (
+                <div className="mb-4 flex gap-2">
+                  <input 
+                    type="text"
+                    value={newTopicName}
+                    onChange={(e) => setNewTopicName(e.target.value)}
+                    placeholder="輸入新空間名稱..."
+                    className="flex-1 bg-slate-900/50 border border-slate-700 rounded px-3 py-1.5 text-xs outline-none focus:border-teal-500/50"
+                  />
+                  <button 
+                    onClick={handleAddTopic}
+                    className="bg-teal-500 text-black px-3 py-1.5 rounded text-xs font-bold"
+                  >
+                    新增
+                  </button>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 overflow-y-auto">
+                {customTopics.map((topic, i) => (
+                  <button 
+                    key={i}
+                    onClick={() => setSelectedSpace(topic)}
+                    className={`flex items-center gap-3 p-4 rounded-xl border transition-all ${selectedSpace === topic ? 'bg-teal-500/10 border-teal-500 text-teal-400' : 'glass-panel hover:bg-white/5 border-transparent text-slate-400'}`}
+                  >
+                    <div className={`p-2 rounded-lg ${selectedSpace === topic ? 'bg-teal-500 text-black' : 'bg-white/5'}`}>
+                      <Layout size={16} />
+                    </div>
+                    <span className="text-xs font-bold tracking-wider uppercase">{topic}</span>
+                  </button>
+                ))}
               </div>
             </div>
           </div>
@@ -367,7 +525,13 @@ export default function App() {
                      <p className="text-xs text-slate-600 text-center py-20 italic">尚未有任何結論，請開始討論</p>
                    ) : (
                      notes.map(n => (
-                        <NoteItem key={n.id} note={n} showLabel />
+                        <NoteItem 
+                          key={n.id} 
+                          note={n} 
+                          showLabel 
+                          onToggleStatus={handleToggleNoteStatus}
+                          onDelete={handleDeleteNote}
+                        />
                      ))
                    )}
                 </div>
@@ -450,6 +614,59 @@ export default function App() {
           </aside>
         </div>
       </main>
+
+      {/* API Key Modal */}
+      <AnimatePresence>
+        {showApiModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="glass-panel rounded-2xl p-8 max-w-md w-full shadow-2xl relative"
+            >
+              <button 
+                onClick={() => setShowApiModal(false)}
+                className="absolute top-4 right-4 text-slate-500 hover:text-white"
+              >
+                <X size={20} />
+              </button>
+              
+              <div className="flex flex-col items-center text-center space-y-4 mb-8">
+                <div className="bg-teal-500/20 p-4 rounded-full text-teal-500">
+                  <Key size={32} />
+                </div>
+                <h3 className="text-xl font-light text-slate-100 uppercase tracking-tight">設定專屬 API KEY</h3>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  若您希望使用自定義的 Gemini API Key，請在此輸入。這將覆蓋系統預設的金鑰。金鑰將僅存在於本次瀏覽，不會持久存儲於伺服器。
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Gemini API Key</label>
+                  <input 
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder="在此貼上您的 API Key..."
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-teal-400 outline-none focus:border-teal-500 transition-all font-mono"
+                  />
+                </div>
+                <button 
+                  onClick={handleSetApiKey}
+                  className="w-full py-4 bg-teal-500 text-black font-bold rounded-xl text-xs uppercase tracking-widest hover:bg-teal-400 transition-all active:scale-95"
+                >
+                  確認並連結 AI
+                </button>
+                <p className="text-[10px] text-center text-slate-500">
+                  尚未有金鑰？ <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-teal-500 hover:underline">前往 Google AI Studio 獲取</a>
+                </p>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -492,18 +709,33 @@ function Hotspot({ label, color = "blue", onClick }: { label: string, color?: st
   );
 }
 
-function NoteItem({ note, showLabel = false }: { note: Note, showLabel?: boolean }) {
+function NoteItem({ note, showLabel = false, onToggleStatus, onDelete }: { note: Note, showLabel?: boolean, onToggleStatus: (id: string) => void, onDelete: (id: string) => void }) {
   return (
     <motion.div 
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="p-4 glass-panel rounded-xl hover:bg-white/5 transition-all group border-l-2 border-l-teal-500/50"
+      className={`p-4 glass-panel rounded-xl hover:bg-white/5 transition-all group border-l-2 ${note.status === 'confirmed' ? 'border-l-emerald-500' : 'border-l-teal-500/50'}`}
     >
       <div className="flex justify-between items-start mb-2">
-        <span className="text-[10px] font-bold uppercase tracking-widest text-slate-600">{note.timestamp}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-600">{note.timestamp}</span>
+          {note.status === 'confirmed' && (
+            <span className="text-[9px] font-black bg-emerald-500 text-black px-1.5 rounded uppercase tracking-tighter">Confirmed</span>
+          )}
+        </div>
         <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-           <button className="text-teal-500/60 hover:text-teal-400 p-1"><CheckCircle2 size={12} /></button>
-           <button className="text-slate-600 hover:text-red-500 p-1"><X size={12} /></button>
+           <button 
+            onClick={() => onToggleStatus(note.id)}
+            className={`${note.status === 'confirmed' ? 'text-emerald-500' : 'text-slate-500 hover:text-emerald-400'} p-1`}
+           >
+            <CheckCircle2 size={12} />
+           </button>
+           <button 
+            onClick={() => onDelete(note.id)}
+            className="text-slate-600 hover:text-red-500 p-1"
+           >
+            <X size={12} />
+           </button>
         </div>
       </div>
       {showLabel && (
@@ -511,7 +743,9 @@ function NoteItem({ note, showLabel = false }: { note: Note, showLabel?: boolean
           {note.floor} • {note.space}
         </span>
       )}
-      <p className="text-xs text-slate-300 leading-relaxed font-light italic tracking-wide">「{note.content}」</p>
+      <p className={`text-xs leading-relaxed italic tracking-wide ${note.status === 'confirmed' ? 'text-slate-100 font-medium' : 'text-slate-300 font-light'}`}>
+        「{note.content}」
+      </p>
     </motion.div>
   );
 }

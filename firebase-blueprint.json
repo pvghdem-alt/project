@@ -1,0 +1,39 @@
+{
+  "entities": {
+    "DiscussionNote": {
+      "title": "會議紀錄筆記",
+      "description": "記錄各樓層特定空間的討論意見、規格要求與決議狀態",
+      "type": "object",
+      "properties": {
+        "floor": { "type": "string", "enum": ["B3F", "B5F"], "description": "所屬樓層" },
+        "space": { "type": "string", "description": "討論的空間或主題名稱" },
+        "content": { "type": "string", "description": "意見回饋內容" },
+        "timestamp": { "type": "string", "format": "date-time", "description": "紀錄時間戳記" },
+        "status": { "type": "string", "enum": ["pending", "confirmed"], "description": "處理狀態" },
+        "authorId": { "type": "string", "description": "紀錄者的 UID" }
+      },
+      "required": ["floor", "space", "content", "timestamp", "status", "authorId"]
+    },
+    "CustomTopic": {
+      "title": "自定義討論事項",
+      "description": "使用者自行新增的討論主題空間",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "主題名稱" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "建立時間" },
+        "creatorId": { "type": "string", "description": "建立者的 UID" }
+      },
+      "required": ["name", "createdAt", "creatorId"]
+    }
+  },
+  "firestore": {
+    "/notes/{noteId}": {
+      "schema": "DiscussionNote",
+      "description": "儲存所有的會議討論筆記"
+    },
+    "/topics/{topicId}": {
+      "schema": "CustomTopic",
+      "description": "儲存使用者自定義的討論樓層/空間主題"
+    }
+  }
+}

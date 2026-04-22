@@ -1,0 +1,49 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Global helpers
+    function isSignedIn() { return request.auth != null; }
+    function isValidId(id) { return id is string && id.size() <= 128; }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+
+    // DiscussionNote Validation
+    function isValidNote(data) {
+      return data.floor in ['B3F', 'B5F'] &&
+             data.space is string && data.space.size() > 0 && data.space.size() <= 100 &&
+             data.content is string && data.content.size() > 0 && data.content.size() <= 2000 &&
+             data.status in ['pending', 'confirmed'] &&
+             data.authorId == request.auth.uid;
+    }
+
+    match /notes/{noteId} {
+      allow list: if isSignedIn();
+      allow get: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(noteId) && isValidNote(incoming());
+      allow update: if isSignedIn() && isValidNote(incoming()) && (
+        // Only allow status changes by any signed in user for collective discussion
+        incoming().diff(existing()).affectedKeys().hasOnly(['status']) ||
+        // Allow author to edit content
+        (existing().authorId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['content', 'status']))
+      );
+      allow delete: if isSignedIn() && existing().authorId == request.auth.uid;
+    }
+
+    // CustomTopic Validation
+    function isValidTopic(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 50 &&
+             data.creatorId == request.auth.uid;
+    }
+
+    match /topics/{topicId} {
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(topicId) && isValidTopic(incoming());
+      allow delete: if isSignedIn() && existing().creatorId == request.auth.uid;
+    }
+  }
+}

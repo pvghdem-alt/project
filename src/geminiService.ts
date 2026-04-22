@@ -2,12 +2,23 @@ import { GoogleGenAI } from "@google/genai";
 import { DESIGN_SPECS } from "./constants";
 
 let ai: GoogleGenAI | null = null;
+let customApiKey: string | null = null;
+
+export function setCustomApiKey(key: string) {
+  customApiKey = key;
+  ai = new GoogleGenAI(key);
+}
 
 function getAiClient() {
+  if (customApiKey) {
+    if (!ai) ai = new GoogleGenAI(customApiKey);
+    return ai;
+  }
+  
   if (!ai) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      throw new Error("GEMINI_API_KEY is not defined. Please set it in the Secrets panel.");
+      throw new Error("GEMINI_API_KEY is not defined.");
     }
     ai = new GoogleGenAI(apiKey);
   }
