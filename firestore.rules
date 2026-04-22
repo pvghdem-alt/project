@@ -7,7 +7,6 @@ service cloud.firestore {
     }
 
     // Global helpers
-    function isSignedIn() { return request.auth != null; }
     function isValidId(id) { return id is string && id.size() <= 128; }
     function incoming() { return request.resource.data; }
     function existing() { return resource.data; }
@@ -17,33 +16,29 @@ service cloud.firestore {
       return data.floor in ['B3F', 'B5F'] &&
              data.space is string && data.space.size() > 0 && data.space.size() <= 100 &&
              data.content is string && data.content.size() > 0 && data.content.size() <= 2000 &&
-             data.status in ['pending', 'confirmed'] &&
-             data.authorId == request.auth.uid;
+             data.status in ['pending', 'confirmed'];
     }
 
     match /notes/{noteId} {
-      allow list: if isSignedIn();
-      allow get: if isSignedIn();
-      allow create: if isSignedIn() && isValidId(noteId) && isValidNote(incoming());
-      allow update: if isSignedIn() && isValidNote(incoming()) && (
-        // Only allow status changes by any signed in user for collective discussion
+      allow list: if true;
+      allow get: if true;
+      allow create: if isValidId(noteId) && isValidNote(incoming());
+      allow update: if isValidNote(incoming()) && (
         incoming().diff(existing()).affectedKeys().hasOnly(['status']) ||
-        // Allow author to edit content
-        (existing().authorId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['content', 'status']))
+        incoming().diff(existing()).affectedKeys().hasOnly(['content', 'status'])
       );
-      allow delete: if isSignedIn() && existing().authorId == request.auth.uid;
+      allow delete: if true;
     }
 
     // CustomTopic Validation
     function isValidTopic(data) {
-      return data.name is string && data.name.size() > 0 && data.name.size() <= 50 &&
-             data.creatorId == request.auth.uid;
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 50;
     }
 
     match /topics/{topicId} {
-      allow list: if isSignedIn();
-      allow create: if isSignedIn() && isValidId(topicId) && isValidTopic(incoming());
-      allow delete: if isSignedIn() && existing().creatorId == request.auth.uid;
+      allow list: if true;
+      allow create: if isValidId(topicId) && isValidTopic(incoming());
+      allow delete: if true;
     }
   }
 }

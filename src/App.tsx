@@ -34,7 +34,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { DESIGN_SPECS } from './constants';
 import { askAiAssistant, setCustomApiKey } from './geminiService';
-import { auth, db, loginWithGoogle, logout } from './lib/firebase';
+import { db } from './lib/firebase';
 import { 
   collection, 
   query, 
@@ -44,10 +44,8 @@ import {
   deleteDoc, 
   doc, 
   orderBy,
-  serverTimestamp,
-  type Timestamp
+  serverTimestamp
 } from 'firebase/firestore';
-import { onAuthStateChanged, type User } from 'firebase/auth';
 
 type FloorKey = 'B3F' | 'B5F';
 
@@ -77,10 +75,6 @@ export default function App() {
   const [showAddTopic, setShowAddTopic] = useState(false);
   const [newTopicName, setNewTopicName] = useState('');
 
-  // Auth State
-  const [user, setUser] = useState<User | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
-
   // API Key state
   const [apiKey, setApiKey] = useState('');
   const [isApiKeySet, setIsApiKeySet] = useState(false);
@@ -98,21 +92,8 @@ export default function App() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
 
-  // Auth Listener
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setAuthLoading(false);
-    });
-    return () => unsubscribe();
-  }, []);
-
   // Firestore Sync: Notes
   useEffect(() => {
-    if (!user) {
-      setNotes([]);
-      return;
-    }
     const q = query(collection(db, 'notes'), orderBy('timestamp', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({
@@ -122,11 +103,10 @@ export default function App() {
       setNotes(data);
     });
     return () => unsubscribe();
-  }, [user]);
+  }, []);
 
   // Firestore Sync: Topics
   useEffect(() => {
-    if (!user) return;
     const q = query(collection(db, 'topics'), orderBy('createdAt', 'asc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => doc.data().name);
@@ -134,17 +114,17 @@ export default function App() {
       setCustomTopics([...defaultTopics, ...data]);
     });
     return () => unsubscribe();
-  }, [user]);
+  }, []);
 
   const handleAddNote = async () => {
-    if (!newNote.trim() || !selectedSpace || !user) return;
+    if (!newNote.trim() || !selectedSpace) return;
     const noteData = {
       floor: activeFloor,
       space: selectedSpace,
       content: newNote,
-      timestamp: new Date().toLocaleString(), // Keep local string for UI but could use serverTimestamp
+      timestamp: new Date().toLocaleString(),
       status: 'pending',
-      authorId: user.uid
+      authorId: 'public'
     };
     try {
       await addDoc(collection(db, 'notes'), noteData);
@@ -172,12 +152,12 @@ export default function App() {
   };
 
   const handleAddTopic = async () => {
-    if (newTopicName.trim() && !customTopics.includes(newTopicName.trim()) && user) {
+    if (newTopicName.trim() && !customTopics.includes(newTopicName.trim())) {
       try {
         await addDoc(collection(db, 'topics'), {
           name: newTopicName.trim(),
           createdAt: serverTimestamp(),
-          creatorId: user.uid
+          creatorId: 'public'
         });
         setNewTopicName('');
         setShowAddTopic(false);
@@ -277,36 +257,14 @@ export default function App() {
             {sidebarOpen && <span className="text-xs font-bold uppercase tracking-widest">{isApiKeySet ? 'API Key 已設定' : '設定 API Key'}</span>}
           </button>
           
-          <div className="flex flex-col gap-2">
-            {!user ? (
-              <button 
-                onClick={() => loginWithGoogle()}
-                className={`w-full flex items-center gap-3 p-3 rounded-xl bg-teal-500 text-black font-bold transition-all hover:bg-teal-400 ${!sidebarOpen && 'justify-center'}`}
-              >
-                <LogIn size={18} />
-                {sidebarOpen && <span className="text-xs uppercase tracking-widest">登入儲存</span>}
-              </button>
-            ) : (
-              <div className={`p-3 rounded-xl bg-white/5 space-y-3 ${!sidebarOpen && 'flex justify-center'}`}>
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-full bg-teal-500/20 flex items-center justify-center text-teal-400 font-bold overflow-hidden">
-                    {user.photoURL ? <img src={user.photoURL} alt="User" /> : <UserIcon size={16} />}
-                  </div>
-                  {sidebarOpen && (
-                    <div className="overflow-hidden">
-                      <p className="text-sm font-medium truncate text-slate-200">{user.displayName || '使用者'}</p>
-                      <p className="text-[10px] text-teal-500/60 font-mono tracking-tighter uppercase">Cloud Synced</p>
-                    </div>
-                  )}
-                </div>
-                {sidebarOpen && (
-                  <button 
-                    onClick={() => logout()}
-                    className="w-full flex items-center justify-center gap-2 py-1.5 text-[10px] text-slate-500 hover:text-red-400 hover:bg-red-500/5 rounded border border-transparent transition-all"
-                  >
-                    <LogOut size={12} /> 登出帳號
-                  </button>
-                )}
+          <div className={`flex items-center gap-3 p-3 rounded-xl bg-white/5 ${!sidebarOpen && 'justify-center'}`}>
+            <div className="w-8 h-8 rounded-full bg-teal-500/20 flex items-center justify-center text-teal-400 font-bold overflow-hidden">
+               <UserIcon size={16} />
+            </div>
+            {sidebarOpen && (
+              <div className="overflow-hidden">
+                <p className="text-sm font-medium truncate text-slate-200">工程協作模式</p>
+                <p className="text-[10px] text-teal-500/60 font-mono tracking-tighter uppercase">Cloud Synced (Public)</p>
               </div>
             )}
           </div>
