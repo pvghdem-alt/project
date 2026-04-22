@@ -1,7 +1,18 @@
 import { GoogleGenAI } from "@google/genai";
 import { DESIGN_SPECS } from "./constants";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+let ai: GoogleGenAI | null = null;
+
+function getAiClient() {
+  if (!ai) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error("GEMINI_API_KEY is not defined. Please set it in the Secrets panel.");
+    }
+    ai = new GoogleGenAI(apiKey);
+  }
+  return ai;
+}
 
 const SYSTEM_PROMPT = `
 你是一位專業的醫療空間設計顧問，正在協助工程承辦人員與護理長討論「屏東榮總龍泉分院B棟3F、5F改建工程」。
@@ -23,16 +34,19 @@ ${JSON.stringify(DESIGN_SPECS.keyPoints, null, 2)}
 
 export async function askAiAssistant(query: string) {
   try {
-    const response = await ai.models.generateContent({
+    const client = getAiClient();
+    const model = client.getGenerativeModel({
       model: "gemini-3-flash-preview",
-      contents: query,
-      config: {
-        systemInstruction: SYSTEM_PROMPT,
-      },
+      systemInstruction: SYSTEM_PROMPT,
     });
-    return response.text;
-  } catch (error) {
+    
+    const response = await model.generateContent(query);
+    return response.response.text();
+  } catch (error: any) {
     console.error("AI Assistant Error:", error);
-    return "抱歉，我現在無法回答這個問題。請稍後再試。";
+    if (error.message?.includes("API_KEY")) {
+      return "尚未設定 API Key。請在 AI Studio 的 Secrets 面板中設定 GEMINI_API_KEY。";
+    }
+    return "抱歉，我現在無法回答這個問題。請確認網路連線或稍後再試。";
   }
 }
