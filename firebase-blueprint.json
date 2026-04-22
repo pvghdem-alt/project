@@ -24,6 +24,42 @@
         "creatorId": { "type": "string", "description": "建立者的 UID" }
       },
       "required": ["name", "createdAt", "creatorId"]
+    },
+    "ProjectMap": {
+      "title": "配置圖設置",
+      "description": "各個樓層或區域的圖面設定，包含 URL 與名稱",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "viewerUrl": { "type": "string" },
+        "type": { "type": "string", "enum": ["3d", "image"] },
+        "order": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["name", "viewerUrl", "type"]
+    },
+    "RequirementCategory": {
+      "title": "工程規範類別",
+      "description": "由 AI 分析總結或手動維護的工程設計規範重點",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "類別名稱" },
+        "points": { "type": "array", "items": { "type": "string" }, "description": "規範要點列表" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["title", "points"]
+    },
+    "ChecklistItem": {
+      "title": "查檢表項目",
+      "description": "討論查檢清單中的項目",
+      "type": "object",
+      "properties": {
+        "text": { "type": "string", "description": "查檢項目名稱" },
+        "checked": { "type": "boolean", "description": "是否已勾選" },
+        "order": { "type": "number", "description": "排序" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["text", "checked"]
     }
   },
   "firestore": {
@@ -34,6 +70,18 @@
     "/topics/{topicId}": {
       "schema": "CustomTopic",
       "description": "儲存使用者自定義的討論樓層/空間主題"
+    },
+    "/maps/{mapId}": {
+      "schema": "ProjectMap",
+      "description": "儲存所有樓層配置圖設定"
+    },
+    "/requirements/{reqId}": {
+      "schema": "RequirementCategory",
+      "description": "儲存 AI 生成或維護的規範內容"
+    },
+    "/checklist/{checkId}": {
+      "schema": "ChecklistItem",
+      "description": "儲存討論查檢表內容"
     }
   }
 }

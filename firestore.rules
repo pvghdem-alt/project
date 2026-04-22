@@ -36,9 +36,27 @@ service cloud.firestore {
     }
 
     match /topics/{topicId} {
+      allow read: if true;
       allow list: if true;
       allow create: if isValidId(topicId) && isValidTopic(incoming());
       allow delete: if true;
+    }
+
+    match /maps/{mapId} {
+      allow read: if true;
+      allow create: if true;
+      allow update: if true;
+      allow delete: if true;
+    }
+
+    match /requirements/{reqId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    match /checklist/{checkId} {
+      allow read: if true;
+      allow write: if true;
     }
   }
 }
