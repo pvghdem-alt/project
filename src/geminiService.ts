@@ -5,22 +5,45 @@ let ai: GoogleGenAI | null = null;
 let customApiKey: string | null = null;
 
 export function setCustomApiKey(key: string) {
+  if (!key || key.trim() === "") {
+    customApiKey = null;
+    ai = null;
+    return;
+  }
   customApiKey = key;
-  ai = new GoogleGenAI(key);
+  try {
+    ai = new GoogleGenAI(key);
+  } catch (e) {
+    console.error("Invalid API Key format:", e);
+    ai = null;
+  }
 }
 
 function getAiClient() {
   if (customApiKey) {
-    if (!ai) ai = new GoogleGenAI(customApiKey);
+    if (!ai) {
+      try {
+        ai = new GoogleGenAI(customApiKey);
+      } catch (e) {
+        console.error("Failed to initialize Gemini AI with custom key:", e);
+        return null;
+      }
+    }
     return ai;
   }
   
   if (!ai) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      throw new Error("GEMINI_API_KEY is not defined.");
+      console.warn("GEMINI_API_KEY is not defined.");
+      return null;
     }
-    ai = new GoogleGenAI(apiKey);
+    try {
+      ai = new GoogleGenAI(apiKey);
+    } catch (e) {
+      console.error("Failed to initialize Gemini AI with environment key:", e);
+      return null;
+    }
   }
   return ai;
 }
@@ -46,8 +69,11 @@ ${JSON.stringify(DESIGN_SPECS.keyPoints, null, 2)}
 export async function askAiAssistant(query: string) {
   try {
     const client = getAiClient();
+    if (!client) {
+      return "尚未完成 AI 設定。請在左側邊欄設定 API Key。";
+    }
     const model = client.getGenerativeModel({
-      model: "gemini-3-flash-preview",
+      model: "gemini-1.5-flash",
       systemInstruction: SYSTEM_PROMPT,
     });
     
@@ -55,9 +81,6 @@ export async function askAiAssistant(query: string) {
     return response.response.text();
   } catch (error: any) {
     console.error("AI Assistant Error:", error);
-    if (error.message?.includes("API_KEY")) {
-      return "尚未設定 API Key。請在 AI Studio 的 Secrets 面板中設定 GEMINI_API_KEY。";
-    }
-    return "抱歉，我現在無法回答這個問題。請確認網路連線或稍後再試。";
+    return "抱歉，AI 助理目前遇到錯誤。請確認您的 API Key 是否正確且具備權限。";
   }
 }

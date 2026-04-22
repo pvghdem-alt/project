@@ -646,10 +646,10 @@ export default function App() {
                 <div className="space-y-2">
                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Gemini API Key</label>
                   <input 
-                    type="password"
+                    type="text"
                     value={apiKey}
                     onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="在此貼上您的 API Key..."
+                    placeholder="在此貼上您的 AIza... 開頭金鑰"
                     className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-teal-400 outline-none focus:border-teal-500 transition-all font-mono"
                   />
                 </div>
