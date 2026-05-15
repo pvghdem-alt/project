@@ -407,12 +407,12 @@ export default function App() {
       } else {
           setNotification({ message: '無更新的規範', type: 'success' });
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      setNotification({ message: '彙整失敗', type: 'error' });
+      setNotification({ message: e.message || '彙整失敗，請檢查 API Key 狀態', type: 'error' });
     } finally {
       setIsCleaning(false);
-      setTimeout(() => setNotification(null), 2000);
+      setTimeout(() => setNotification(null), 4000);
     }
   };
 
@@ -955,9 +955,17 @@ export default function App() {
     setChatInput('');
     setIsAiLoading(true);
 
-    const aiRes = await askAiAssistant(userMsg);
-    setChatMessages(prev => [...prev, { role: 'assistant', content: aiRes }]);
-    setIsAiLoading(false);
+    try {
+      const aiRes = await askAiAssistant(userMsg);
+      setChatMessages(prev => [...prev, { role: 'assistant', content: aiRes }]);
+    } catch (err: any) {
+      console.error(err);
+      setChatMessages(prev => [...prev, { role: 'assistant', content: `**發生錯誤**: ${err.message || '無法取得 AI 回覆'}` }]);
+      setNotification({ message: err.message || 'AI 請求失敗', type: 'error' });
+      setTimeout(() => setNotification(null), 3000);
+    } finally {
+      setIsAiLoading(false);
+    }
   };
 
   const handleResize = (e: MouseEvent) => {
@@ -1211,10 +1219,6 @@ export default function App() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-             <button className="flex items-center gap-2 text-sm text-slate-500 bg-black/5 border border-slate-300 px-3 py-1.5 rounded hover:bg-black/10 transition-colors uppercase tracking-widest">
-                <ExternalLink size={14} />
-                圖面比對
-             </button>
           </div>
         </header>
 

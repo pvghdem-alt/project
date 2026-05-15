@@ -97,8 +97,10 @@ export async function askAiAssistant(query: string) {
     } catch (error: any) {
       console.error(`AI Assistant Error (Attempt ${retries + 1}):`, error);
       
+      const isQuotaError = error?.status === 429 || error?.code === 429 || error?.message?.includes("quota");
+
       // Handle Rate Limit (429)
-      if (error?.status === 429 || error?.code === 429) {
+      if (isQuotaError) {
         if (retries < maxRetries) {
           retries++;
           const delay = Math.pow(2, retries) * 1000;
@@ -106,13 +108,13 @@ export async function askAiAssistant(query: string) {
           await new Promise(resolve => setTimeout(resolve, delay));
           continue;
         }
-        return "AI 目前負載過高 (Rate Limit)，請稍候再試。";
+        throw new Error("AI 目前負載過高 (Quota Exceeded)，請確認您的 API Key 額度或稍後再試。");
       }
 
-      return "抱歉，AI 助理目前遇到錯誤。請確認您的 API Key 是否正確且具備權限。";
+      throw new Error("抱歉，AI 助理目前遇到錯誤。請確認您的 API Key 是否正確且具備權限。");
     }
   }
-  return "AI 助理連線逾時，請稍後再試。";
+  throw new Error("AI 助理連線逾時，請稍後再試。");
 }
 
 export async function analyzeNotesToRequirements(currentRequirements: any[], confirmedNotes: any[], selectedSpace: string) {
@@ -187,15 +189,21 @@ ${JSON.stringify(confirmedNotes.map(n => n.content), null, 2)}
       return JSON.parse(jsonStr);
     } catch (error: any) {
       console.error(`AI Analysis Error (Attempt ${retries + 1}):`, error);
-      if ((error?.status === 429 || error?.code === 429) && retries < maxRetries) {
+      const isQuotaError = error?.status === 429 || error?.code === 429 || error?.message?.includes("quota");
+      
+      if (isQuotaError && retries < maxRetries) {
         retries++;
         await new Promise(resolve => setTimeout(resolve, Math.pow(2, retries) * 1000));
         continue;
       }
-      return null;
+      
+      if (isQuotaError) {
+        throw new Error("AI 分析額度已達上限 (Quota Exceeded)，請確認您的 API Key 方案。");
+      }
+      throw error;
     }
   }
-  return null;
+  throw new Error("AI 分析連線逾時");
 }
 
 export async function deduplicateData(type: 'requirements' | 'checklist', data: any[]) {
@@ -239,15 +247,21 @@ ${type === 'requirements' ? '物件格式: [{ title: string, points: string[] }]
       return JSON.parse(jsonStr);
     } catch (error: any) {
       console.error(`AI Cleanup Error (Attempt ${retries + 1}):`, error);
-      if ((error?.status === 429 || error?.code === 429) && retries < maxRetries) {
+      const isQuotaError = error?.status === 429 || error?.code === 429 || error?.message?.includes("quota");
+      
+      if (isQuotaError && retries < maxRetries) {
         retries++;
         await new Promise(resolve => setTimeout(resolve, 2000));
         continue;
       }
-      return null;
+      
+      if (isQuotaError) {
+        throw new Error("AI 清理額度已達上限 (Quota Exceeded)。");
+      }
+      throw error;
     }
   }
-  return null;
+  throw new Error("AI 清理連線逾時");
 }
 
 export async function analyzeFileToSpecs(fileData: { data: string, mimeType: string }) {
@@ -288,8 +302,12 @@ export async function analyzeFileToSpecs(fileData: { data: string, mimeType: str
     if (!text) return null;
     const jsonStr = text.replace(/```json|```/gi, "").trim();
     return JSON.parse(jsonStr);
-  } catch (error) {
+  } catch (error: any) {
     console.error("File Analysis Error:", error);
-    return null;
+    const isQuotaError = error?.status === 429 || error?.code === 429 || error?.message?.includes("quota");
+    if (isQuotaError) {
+      throw new Error("AI 文件分析額度已達上限 (Quota Exceeded)。");
+    }
+    throw error;
   }
 }
