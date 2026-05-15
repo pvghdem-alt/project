@@ -34,7 +34,9 @@ import {
   FileUp,
   Copy,
   GripVertical,
-  Edit
+  Edit,
+  Trash2,
+  ChevronDown
 } from 'lucide-react';
 import { motion, AnimatePresence, Reorder } from 'motion/react';
 import Markdown from 'react-markdown';
@@ -321,7 +323,7 @@ export default function App() {
       content: newNote,
       timestamp: new Date().toLocaleString(),
       createdAt: serverTimestamp(),
-      status: 'confirmed',
+      status: 'pending',
       authorId: 'public'
     };
     try {
@@ -344,10 +346,10 @@ export default function App() {
       const categoryReqs = requirements.filter(r => CATEGORIES.includes(r.title));
       const sourceReqs = [...currentSpaceReqs, ...categoryReqs];
       
-      const sourceNotes = notes.filter(n => n.space === selectedSpace && n.floor === activeFloor);
+      const sourceNotes = notes.filter(n => n.space === selectedSpace && n.floor === activeFloor && n.status === 'pending');
 
       if (sourceNotes.length === 0) {
-         setNotification({ message: '無會議紀錄可整合', type: 'error' });
+         setNotification({ message: '無新會議紀錄可整合', type: 'error' });
          setIsCleaning(false);
          setTimeout(() => setNotification(null), 2000);
          return;
@@ -384,6 +386,16 @@ export default function App() {
               });
             }
           }
+          
+          // Update note status to confirmed after integration
+          const noteUpdateBatch = writeBatch(db);
+          sourceNotes.forEach(n => {
+            if (n.status === 'pending') {
+              noteUpdateBatch.update(doc(db, 'notes', n.id), { status: 'confirmed' });
+            }
+          });
+          await noteUpdateBatch.commit();
+
           await batch.commit();
           setNotification({ message: '工程規範已自動彙整分類！', type: 'success' });
       } else {
@@ -1248,16 +1260,18 @@ export default function App() {
                                         >
                                           <Edit size={16} />
                                         </button>
-                                        <button 
-                                          onClick={async () => {
-                                            if (window.confirm(`確定要刪除「${cat.title}」分類嗎？`)) {
-                                              await deleteDoc(doc(db, 'requirements', cat.id));
-                                            }
-                                          }}
-                                          className="p-2 hover:bg-red-100 text-red-600 rounded-xl"
-                                        >
-                                          <Trash2 size={16} />
-                                        </button>
+                                        {!cat.id.startsWith('default-') && (
+                                          <button 
+                                            onClick={async () => {
+                                              if (window.confirm(`確定要刪除「${cat.title}」分類嗎？`)) {
+                                                await deleteDoc(doc(db, 'requirements', cat.id));
+                                              }
+                                            }}
+                                            className="p-2 hover:bg-red-100 text-red-600 rounded-xl"
+                                          >
+                                            <Trash2 size={16} />
+                                          </button>
+                                        )}
                                       </div>
                                     </div>
                                     <ul className="space-y-3 pl-1">
@@ -1707,18 +1721,22 @@ function Hotspot({ label, color = "blue", onClick }: { label: string, color?: st
 }
 
 function NoteItem({ note, showLabel = false, onToggleStatus, onDelete, onEdit }: { note: Note, showLabel?: boolean, onToggleStatus: (id: string, current: string) => void, onDelete: (id: string) => void, onEdit: (note: Note) => void }) {
+  const isConfirmed = note.status === 'confirmed';
+  
   return (
     <motion.div 
       initial={{ opacity: 0, y: 5 }}
       animate={{ opacity: 1, y: 0 }}
-      className={`p-3 glass-panel rounded-xl hover:bg-black/5 transition-all group border-l-2 mb-2 ${note.status === 'confirmed' ? 'border-l-emerald-500' : 'border-l-blue-500/50'}`}
+      className={`p-3 glass-panel rounded-xl hover:bg-black/5 transition-all group border-l-2 mb-2 ${isConfirmed ? 'border-l-emerald-500 bg-emerald-50/10' : 'border-l-red-500/50 bg-red-50/10'}`}
     >
       <div className="flex justify-between items-start mb-1">
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{note.timestamp.split(' ')[1] || note.timestamp}</span>
-          {note.status === 'confirmed' && (
-            <span className="text-[9px] font-black bg-emerald-500 text-white px-1.5 rounded uppercase tracking-tighter">Confirmed</span>
-          )}
+          <span className={`text-[9px] font-black px-1.5 py-0.5 rounded uppercase tracking-tighter shadow-sm ${
+            isConfirmed ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'
+          }`}>
+            {isConfirmed ? '已加入' : '未加入'}
+          </span>
         </div>
         <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
            <button 
@@ -1801,7 +1819,7 @@ function NotesArchived({ notes, onToggleStatus, onDelete, onEdit }: { notes: Not
                <span className={`text-xs font-bold ${expandedDates.includes(date) ? 'text-blue-600' : 'text-slate-500'}`}>📅 {date}</span>
                <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-full group-hover:bg-blue-100 group-hover:text-blue-600 transition-colors">{grouped[date].length}</span>
             </div>
-            <ChevronRight size={14} className={`text-slate-400 transition-transform ${expandedDates.includes(date) ? 'rotate-90' : ''}`} />
+            {expandedDates.includes(date) ? <ChevronDown size={14} className="text-blue-500" /> : <ChevronRight size={14} className="text-slate-400" />}
           </button>
           
           <AnimatePresence>
