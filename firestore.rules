@@ -27,12 +27,12 @@ service cloud.firestore {
     match /notes/{noteId} {
       allow list: if true;
       allow get: if true;
-      allow create: if isValidId(noteId) && isValidNote(incoming()) && incoming().createdAt == request.time;
-      allow update: if isValidNote(incoming()) && (
+      allow create: if isSignedIn() && isValidId(noteId) && isValidNote(incoming()) && incoming().createdAt == request.time;
+      allow update: if isSignedIn() && isValidNote(incoming()) && (
         incoming().diff(existing()).affectedKeys().hasOnly(['status']) ||
         incoming().diff(existing()).affectedKeys().hasOnly(['content', 'status'])
       ) && incoming().createdAt == existing().createdAt;
-      allow delete: if true;
+      allow delete: if isSignedIn();
     }
 
     // CustomTopic Validation
@@ -49,8 +49,8 @@ service cloud.firestore {
 
     match /topics/{topicId} {
       allow read, list: if true;
-      allow create: if isValidId(topicId) && isValidTopic(incoming()) && incoming().createdAt == request.time;
-      allow update: if isValidTopic(incoming()) && 
+      allow create: if isSignedIn() && isValidId(topicId) && isValidTopic(incoming()) && incoming().createdAt == request.time;
+      allow update: if isSignedIn() && isValidTopic(incoming()) && 
                     (
                       incoming().diff(existing()).affectedKeys().hasOnly(['name']) ||
                       incoming().diff(existing()).affectedKeys().hasOnly(['order']) ||
@@ -60,22 +60,38 @@ service cloud.firestore {
                     incoming().creatorId == existing().creatorId &&
                     (existing().get('type', 'space') == incoming().type) &&
                     incoming().isDefault == existing().isDefault;
-      allow delete: if true;
+      allow delete: if isSignedIn();
     }
 
     match /maps/{mapId} {
       allow read: if true;
-      allow write: if true;
+      allow write: if isSignedIn();
     }
 
     match /requirements/{reqId} {
       allow read: if true;
-      allow write: if true;
+      allow write: if isSignedIn();
     }
 
     match /checklist/{checkId} {
       allow read: if true;
-      allow write: if true;
+      allow write: if isSignedIn();
+    }
+
+    // SpacePhotos Validation
+    function isValidPhoto(data) {
+      return data.keys().hasAll(['space', 'url', 'createdAt', 'authorId']) &&
+             data.keys().size() >= 4 &&
+             data.space is string &&
+             data.url is string && data.url.size() < 1000000 && // Under 1MB
+             data.authorId is string;
+    }
+
+    match /photos/{photoId} {
+      allow read, list: if true;
+      allow create: if isSignedIn() && isValidPhoto(incoming()) && incoming().createdAt == request.time;
+      allow update: if false; // Photos are immutable or only updated by admin
+      allow delete: if isSignedIn();
     }
   }
 }

@@ -63,6 +63,18 @@
         "createdAt": { "type": "string" }
       },
       "required": ["text", "checked"]
+    },
+    "SpacePhoto": {
+      "title": "空間照片",
+      "description": "各個空間的實況或示意照片紀錄",
+      "type": "object",
+      "properties": {
+        "space": { "type": "string", "description": "所屬空間名稱" },
+        "url": { "type": "string", "description": "照片的 Base64 資料" },
+        "createdAt": { "type": "string", "description": "上傳時間" },
+        "authorId": { "type": "string", "description": "上傳者的 UID" }
+      },
+      "required": ["space", "url", "createdAt", "authorId"]
     }
   },
   "firestore": {
@@ -85,6 +97,10 @@
     "/checklist/{checkId}": {
       "schema": "ChecklistItem",
       "description": "儲存討論查檢表內容"
+    },
+    "/photos/{photoId}": {
+      "schema": "SpacePhoto",
+      "description": "儲存各個空間的上傳照片資料"
     }
   }
 }

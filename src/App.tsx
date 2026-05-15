@@ -36,13 +36,17 @@ import {
   GripVertical,
   Edit,
   Trash2,
-  ChevronDown
+  ChevronDown,
+  Camera,
+  UploadCloud
 } from 'lucide-react';
 import { motion, AnimatePresence, Reorder } from 'motion/react';
 import Markdown from 'react-markdown';
+import imageCompression from 'browser-image-compression';
 import { DESIGN_SPECS } from './constants';
 import { askAiAssistant, setCustomApiKey, analyzeNotesToRequirements, deduplicateData, analyzeFileToSpecs } from './geminiService';
 import { db, auth } from './lib/firebase';
+import { signInWithEmailAndPassword, onAuthStateChanged, User } from 'firebase/auth';
 import { 
   collection, 
   query, 
@@ -153,7 +157,22 @@ interface Topic {
   type?: 'space' | 'trade';
 }
 
+interface SpacePhoto {
+  id: string;
+  space: string;
+  url: string; // Base64 compressed
+  description?: string;
+  createdAt: any;
+  authorId: string;
+}
+
 export default function App() {
+  const [user, setUser] = useState<User | null>(null);
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [isLoginLoading, setIsLoginLoading] = useState(false);
+
   const [activeFloor, setActiveFloor] = useState<FloorKey>('B3F');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [selectedSpace, setSelectedSpace] = useState<string | null>(null);
@@ -210,8 +229,20 @@ export default function App() {
   const [collapsedChatIndices, setCollapsedChatIndices] = useState<number[]>([]);
   const [isResizing, setIsResizing] = useState(false);
 
+  const [spacePhotos, setSpacePhotos] = useState<SpacePhoto[]>([]);
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+
   const chatEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+
+  // Auth Listener
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+    });
+    return () => unsubscribe();
+  }, []);
 
   // Initializing active floor if data exists
   useEffect(() => {
@@ -318,6 +349,22 @@ export default function App() {
     });
     return () => unsubscribe();
   }, []);
+
+  // Firestore Sync: Space Photos
+  useEffect(() => {
+    if (!selectedSpace) {
+      setSpacePhotos([]);
+      return;
+    }
+    const q = query(collection(db, 'photos'), where('space', '==', selectedSpace), orderBy('createdAt', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as SpacePhoto[];
+      setSpacePhotos(data);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'photos');
+    });
+    return () => unsubscribe();
+  }, [selectedSpace]);
 
   const handleAddNote = async () => {
     if (!newNote.trim() || !selectedSpace) return;
@@ -686,6 +733,91 @@ export default function App() {
       alert("AI 分析失敗，請稍後再試。");
     } finally {
       setIsAnalyzing(false);
+    }
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!loginEmail || !loginPassword) return;
+    setIsLoginLoading(true);
+    try {
+      await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
+      setShowLoginModal(false);
+      setNotification({ message: '登入成功！', type: 'success' });
+      setTimeout(() => setNotification(null), 2000);
+    } catch (err: any) {
+      console.error(err);
+      setNotification({ message: '登入失敗，請檢查帳號密碼', type: 'error' });
+      setTimeout(() => setNotification(null), 3000);
+    } finally {
+      setIsLoginLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await auth.signOut();
+      setNotification({ message: '已登出', type: 'success' });
+      setTimeout(() => setNotification(null), 2000);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handlePhotoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0 || !selectedSpace) return;
+    
+    setIsUploadingPhoto(true);
+    setNotification({ message: '正在壓縮並上傳照片...', type: 'ai' });
+
+    try {
+      const options = {
+        maxSizeMB: 0.15, // Compressing to ~150KB to fit in Firestore safely
+        maxWidthOrHeight: 1280,
+        useWebWorker: true
+      };
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const compressedFile = await imageCompression(file, options);
+        
+        const reader = new FileReader();
+        const base64Promise = new Promise<string>((resolve) => {
+          reader.onload = () => resolve(reader.result as string);
+          reader.readAsDataURL(compressedFile);
+        });
+        
+        const base64 = await base64Promise;
+        
+        await addDoc(collection(db, 'photos'), {
+          space: selectedSpace,
+          url: base64,
+          createdAt: serverTimestamp(),
+          authorId: user?.uid || 'guest'
+        });
+      }
+
+      setNotification({ message: `成功上傳 ${files.length} 張照片`, type: 'success' });
+      setTimeout(() => setNotification(null), 3000);
+    } catch (err) {
+      console.error(err);
+      setNotification({ message: '照片上傳失敗', type: 'error' });
+      setTimeout(() => setNotification(null), 3000);
+    } finally {
+      setIsUploadingPhoto(false);
+      if (photoInputRef.current) photoInputRef.current.value = '';
+    }
+  };
+
+  const handleDeletePhoto = async (id: string) => {
+    if (!user) return;
+    try {
+      await deleteDoc(doc(db, 'photos', id));
+      setNotification({ message: '照片已刪除', type: 'success' });
+      setTimeout(() => setNotification(null), 2000);
+    } catch (err) {
+      console.error(err);
     }
   };
 
@@ -1062,13 +1194,15 @@ export default function App() {
                 <h3 className={`text-[10px] font-bold text-slate-400 uppercase tracking-widest ${!sidebarOpen && 'hidden'}`}>空間細部討論</h3>
              </div>
 
-             <button 
-                onClick={() => setShowAddTopic({ open: !showAddTopic.open || showAddTopic.type !== 'space', type: 'space' })}
-                className={`w-full flex items-center gap-3 px-4 py-2 text-blue-500 hover:bg-blue-50 rounded-lg transition-colors mb-2 ${!sidebarOpen && 'justify-center'}`}
-             >
-                <PlusCircle size={18} />
-                {sidebarOpen && <span className="text-xs font-bold uppercase tracking-widest">新增設計空間</span>}
-             </button>
+             {user && (
+               <button 
+                  onClick={() => setShowAddTopic({ open: !showAddTopic.open || showAddTopic.type !== 'space', type: 'space' })}
+                  className={`w-full flex items-center gap-3 px-4 py-2 text-blue-500 hover:bg-blue-50 rounded-lg transition-colors mb-2 ${!sidebarOpen && 'justify-center'}`}
+               >
+                  <PlusCircle size={18} />
+                  {sidebarOpen && <span className="text-xs font-bold uppercase tracking-widest">新增設計空間</span>}
+               </button>
+             )}
 
              {sidebarOpen && showAddTopic.open && showAddTopic.type === 'space' && (
                <div className="mb-4 flex flex-col gap-2 px-4 py-3 bg-blue-50/50 rounded-xl border border-blue-100 mx-2">
@@ -1125,13 +1259,15 @@ export default function App() {
                 <h3 className={`text-[10px] font-bold text-slate-400 uppercase tracking-widest ${!sidebarOpen && 'hidden'}`}>分項工程</h3>
              </div>
 
-             <button 
-                onClick={() => setShowAddTopic({ open: !showAddTopic.open || showAddTopic.type !== 'trade', type: 'trade' })}
-                className={`w-full flex items-center gap-3 px-4 py-2 text-blue-500 hover:bg-blue-50 rounded-lg transition-colors mb-2 ${!sidebarOpen && 'justify-center'}`}
-             >
-                <PlusCircle size={18} />
-                {sidebarOpen && <span className="text-xs font-bold uppercase tracking-widest">新增分項工程</span>}
-             </button>
+             {user && (
+               <button 
+                  onClick={() => setShowAddTopic({ open: !showAddTopic.open || showAddTopic.type !== 'trade', type: 'trade' })}
+                  className={`w-full flex items-center gap-3 px-4 py-2 text-blue-500 hover:bg-blue-50 rounded-lg transition-colors mb-2 ${!sidebarOpen && 'justify-center'}`}
+               >
+                  <PlusCircle size={18} />
+                  {sidebarOpen && <span className="text-xs font-bold uppercase tracking-widest">新增分項工程</span>}
+               </button>
+             )}
 
              {sidebarOpen && showAddTopic.open && showAddTopic.type === 'trade' && (
                <div className="mb-4 flex flex-col gap-2 px-4 py-3 bg-blue-50/50 rounded-xl border border-blue-100 mx-2">
@@ -1192,17 +1328,32 @@ export default function App() {
             {sidebarOpen && <span className="text-sm font-bold uppercase tracking-widest">{isApiKeySet ? 'API Key 已設定' : '設定 API Key'}</span>}
           </button>
           
-          <div className={`flex items-center gap-3 p-3 rounded-xl bg-black/5 ${!sidebarOpen && 'justify-center'}`}>
-            <div className="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center text-blue-600 font-bold overflow-hidden">
-               <UserIcon size={16} />
-            </div>
-            {sidebarOpen && (
-              <div className="overflow-hidden">
-                <p className="text-base font-medium truncate text-slate-900">工程協作模式</p>
-                <p className="text-xs text-blue-500/60 font-mono tracking-tighter uppercase">Cloud Synced (Public)</p>
+          {user ? (
+            <div className={`p-3 rounded-xl bg-blue-50 border border-blue-100 ${!sidebarOpen && 'flex justify-center'}`}>
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white font-bold group relative cursor-pointer" onClick={handleLogout}>
+                   <UserIcon size={16} />
+                   <div className="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                     <LogOut size={14} />
+                   </div>
+                </div>
+                {sidebarOpen && (
+                  <div className="overflow-hidden flex-1">
+                    <p className="text-xs font-bold truncate text-slate-900">{user.email}</p>
+                    <button onClick={handleLogout} className="text-[10px] text-blue-600 font-bold uppercase tracking-widest hover:underline text-left block">登出帳號</button>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            </div>
+          ) : (
+            <button 
+              onClick={() => setShowLoginModal(true)}
+              className={`w-full flex items-center gap-3 p-3 rounded-xl bg-blue-600 text-white shadow-lg shadow-blue-500/20 hover:bg-blue-700 transition-all ${!sidebarOpen && 'justify-center'}`}
+            >
+              <LogIn size={18} />
+              {sidebarOpen && <span className="text-sm font-bold uppercase tracking-widest">登入協作模式</span>}
+            </button>
+          )}
         </div>
       </motion.aside>
 
@@ -1326,7 +1477,7 @@ export default function App() {
                         <p className="text-lg font-medium">請從左側選單選擇一個空間進行討論</p>
                       </div>
                     ) : (
-                      <div className="h-full flex flex-col p-6 lg:p-8 space-y-6">
+                      <div className="h-full flex flex-col p-6 lg:p-8 space-y-8">
                         <div className="flex items-center justify-between pb-4 border-b border-slate-100 shrink-0">
                           <div>
                             <h4 className="text-xs font-black text-blue-600 uppercase tracking-widest mb-1">空間細部規範</h4>
@@ -1338,6 +1489,64 @@ export default function App() {
                           >
                             <X size={20} />
                           </button>
+                        </div>
+
+                        {/* Space Photos Section */}
+                        <div className="space-y-4 shrink-0">
+                          <div className="flex items-center justify-between">
+                            <h4 className="text-base font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
+                              <ImageIcon size={18} className="text-blue-500" /> 空間現況/示意照片
+                            </h4>
+                            {user && (
+                              <button 
+                                onClick={() => photoInputRef.current?.click()}
+                                disabled={isUploadingPhoto}
+                                className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-slate-800 transition-all shadow-md active:scale-95 disabled:opacity-50"
+                              >
+                                {isUploadingPhoto ? <Loader2 size={14} className="animate-spin" /> : <Camera size={14} />}
+                                上傳照片
+                              </button>
+                            )}
+                            <input 
+                              type="file"
+                              ref={photoInputRef}
+                              hidden
+                              multiple
+                              accept="image/*"
+                              onChange={handlePhotoUpload}
+                            />
+                          </div>
+
+                          {spacePhotos.length > 0 ? (
+                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+                              {spacePhotos.map((photo) => (
+                                <div key={photo.id} className="relative group aspect-square rounded-2xl overflow-hidden border border-slate-200 bg-slate-50 shadow-sm transition-all hover:shadow-lg hover:scale-[1.02]">
+                                  <img 
+                                    src={photo.url} 
+                                    alt="Space view" 
+                                    className="w-full h-full object-cover"
+                                    loading="lazy"
+                                  />
+                                  {user && (
+                                    <button 
+                                      onClick={() => handleDeletePhoto(photo.id)}
+                                      className="absolute top-2 right-2 p-1.5 bg-red-600 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity shadow-lg hover:bg-red-700"
+                                    >
+                                      <Trash2 size={12} />
+                                    </button>
+                                  )}
+                                  <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/60 to-transparent p-2 text-[10px] text-white opacity-0 group-hover:opacity-100 transition-opacity">
+                                    {new Date(photo.createdAt?.seconds * 1000).toLocaleDateString()}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="flex flex-col items-center justify-center p-10 border-2 border-dashed border-slate-200 rounded-3xl bg-slate-50/50">
+                              <ImageIcon size={32} className="text-slate-300 mb-2" />
+                              <p className="text-sm text-slate-400 font-medium font-sans">尚無空間照片</p>
+                            </div>
+                          )}
                         </div>
 
                         <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-2">
@@ -1362,22 +1571,24 @@ export default function App() {
                                       <h5 className="text-lg font-black text-blue-700 border-l-4 border-blue-500 pl-4 py-1 uppercase tracking-tight">
                                         {cat.title}
                                       </h5>
-                                      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                        <button 
-                                          onClick={() => setEditingReq({ id: cat.id, title: cat.title, points: cat.points })}
-                                          className="p-2 hover:bg-blue-100 text-blue-600 rounded-xl"
-                                        >
-                                          <Edit size={16} />
-                                        </button>
-                                        {!cat.id.startsWith('default-') && (
+                                      {user && (
+                                        <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                           <button 
-                                            onClick={() => setDeleteConfirm({ id: cat.id, name: cat.title, type: 'requirement' })}
-                                            className="p-2 hover:bg-red-100 text-red-600 rounded-xl"
+                                            onClick={() => setEditingReq({ id: cat.id, title: cat.title, points: cat.points })}
+                                            className="p-2 hover:bg-blue-100 text-blue-600 rounded-xl"
                                           >
-                                            <Trash2 size={16} />
+                                            <Edit size={16} />
                                           </button>
-                                        )}
-                                      </div>
+                                          {!cat.id.startsWith('default-') && (
+                                            <button 
+                                              onClick={() => setDeleteConfirm({ id: cat.id, name: cat.title, type: 'requirement' })}
+                                              className="p-2 hover:bg-red-100 text-red-600 rounded-xl"
+                                            >
+                                              <Trash2 size={16} />
+                                            </button>
+                                          )}
+                                        </div>
+                                      )}
                                     </div>
                                     <ul className="space-y-3 pl-1">
                                       {cat.points.map((p, i) => (
@@ -1418,15 +1629,16 @@ export default function App() {
                     <textarea 
                       value={newNote}
                       onChange={(e) => setNewNote(e.target.value)}
-                      placeholder="請輸入討論建議（支持白話，AI 會代為修飾）..."
-                      className="w-full h-32 p-4 bg-slate-50 border border-slate-200 rounded-2xl text-base text-slate-900 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/5 shadow-inner outline-none resize-none transition-all placeholder:text-slate-400"
+                      placeholder={user ? "請輸入討論建議（支持白話，AI 會代為修飾）..." : "請先登入後再提供建議"}
+                      disabled={!user}
+                      className={`w-full h-32 p-4 border border-slate-200 rounded-2xl text-base text-slate-900 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/5 shadow-inner outline-none resize-none transition-all placeholder:text-slate-400 ${user ? 'bg-slate-50 text-slate-900' : 'bg-slate-100 text-slate-400 cursor-not-allowed'}`}
                     />
                     <button 
                       onClick={handleAddNote}
-                      disabled={!newNote.trim()}
+                      disabled={!newNote.trim() || !user}
                       className="w-full py-4 bg-blue-600 text-white rounded-2xl font-black shadow-lg shadow-blue-500/20 hover:bg-blue-700 hover:shadow-blue-500/30 disabled:opacity-50 transition-all active:scale-[0.98] text-sm tracking-widest uppercase"
                     >
-                      送出討論內容
+                      {user ? '送出討論內容' : '請登入提供討論建議'}
                     </button>
                   </div>
 
@@ -1766,6 +1978,61 @@ export default function App() {
                   確定刪除
                 </button>
               </div>
+            </motion.div>
+          </div>
+        )}
+
+        {showLoginModal && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowLoginModal(false)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-md" />
+            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 20 }} className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden p-8 space-y-8">
+               <div className="text-center space-y-2">
+                 <div className="w-16 h-16 bg-blue-500 rounded-2xl flex items-center justify-center text-white mx-auto shadow-xl shadow-blue-500/20">
+                   <Building2 size={32} />
+                 </div>
+                 <h3 className="text-2xl font-black text-slate-900">協作者登入</h3>
+                 <p className="text-sm text-slate-500 font-medium">請使用指定的 Email 帳號進入編輯模式</p>
+               </div>
+               
+               <form onSubmit={handleLogin} className="space-y-6">
+                 <div className="space-y-2">
+                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">帳號 (Email)</label>
+                   <input 
+                     required
+                     type="email"
+                     value={loginEmail}
+                     onChange={(e) => setLoginEmail(e.target.value)}
+                     placeholder="your@email.com"
+                     className="w-full h-14 px-5 bg-slate-50 border border-slate-200 rounded-2xl text-slate-900 font-bold focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/5 outline-none transition-all placeholder:text-slate-300"
+                   />
+                 </div>
+                 <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">密碼 (Password)</label>
+                    <input 
+                      required
+                      type="password"
+                      value={loginPassword}
+                      onChange={(e) => setLoginPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full h-14 px-5 bg-slate-50 border border-slate-200 rounded-2xl text-slate-900 font-bold focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/5 outline-none transition-all placeholder:text-slate-300"
+                    />
+                 </div>
+                 <button 
+                   type="submit"
+                   disabled={isLoginLoading}
+                   className="w-full py-5 bg-blue-600 text-white rounded-2xl font-black shadow-xl shadow-blue-500/30 hover:bg-blue-700 transition-all flex items-center justify-center gap-3 disabled:opacity-50"
+                 >
+                   {isLoginLoading ? <Loader2 size={20} className="animate-spin" /> : <ShieldAlert size={20} />}
+                   授權並進入系統
+                 </button>
+               </form>
+               
+               <button 
+                 onClick={() => setShowLoginModal(false)}
+                 className="w-full py-2 text-xs font-bold text-slate-400 hover:text-slate-600 transition-colors uppercase tracking-widest"
+               >
+                 暫不登入 (僅限檢視)
+               </button>
             </motion.div>
           </div>
         )}
