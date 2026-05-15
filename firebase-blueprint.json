@@ -23,7 +23,8 @@
         "name": { "type": "string", "description": "主題名稱" },
         "createdAt": { "type": "string", "description": "建立時間" },
         "creatorId": { "type": "string", "description": "建立者的 UID" },
-        "floorId": { "type": "string", "description": "所屬樓層 ID" }
+        "floorId": { "type": "string", "description": "所屬樓層 ID" },
+        "order": { "type": "number", "description": "排序順序" }
       },
       "required": ["name", "createdAt", "creatorId", "floorId"]
     },

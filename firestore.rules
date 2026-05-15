@@ -20,7 +20,6 @@ service cloud.firestore {
              data.space is string && data.space.size() <= 200 &&
              data.content is string && data.content.size() <= 10000 &&
              data.timestamp is string && data.timestamp.size() <= 100 &&
-             data.createdAt == request.time &&
              data.status in ['pending', 'confirmed'] &&
              data.authorId is string;
     }
@@ -28,7 +27,7 @@ service cloud.firestore {
     match /notes/{noteId} {
       allow list: if true;
       allow get: if true;
-      allow create: if isValidId(noteId) && isValidNote(incoming());
+      allow create: if isValidId(noteId) && isValidNote(incoming()) && incoming().createdAt == request.time;
       allow update: if isValidNote(incoming()) && (
         incoming().diff(existing()).affectedKeys().hasOnly(['status']) ||
         incoming().diff(existing()).affectedKeys().hasOnly(['content', 'status'])
@@ -38,19 +37,24 @@ service cloud.firestore {
 
     // CustomTopic Validation
     function isValidTopic(data) {
-      return data.keys().hasAll(['name', 'createdAt', 'creatorId', 'floorId']) &&
-             data.keys().size() == 4 &&
+      return data.keys().hasAll(['name', 'createdAt', 'creatorId', 'floorId', 'order', 'isDefault']) &&
+             data.keys().size() == 6 &&
              data.name is string && data.name.size() <= 100 &&
-             data.createdAt == request.time &&
              data.creatorId is string &&
-             data.floorId is string;
+             data.floorId is string &&
+             data.order is number &&
+             data.isDefault is bool;
     }
 
     match /topics/{topicId} {
       allow read, list: if true;
-      allow create: if isValidId(topicId) && isValidTopic(incoming());
+      allow create: if isValidId(topicId) && isValidTopic(incoming()) && incoming().createdAt == request.time;
       allow update: if isValidTopic(incoming()) && 
-                    incoming().diff(existing()).affectedKeys().hasOnly(['name']) &&
+                    (
+                      incoming().diff(existing()).affectedKeys().hasOnly(['name']) ||
+                      incoming().diff(existing()).affectedKeys().hasOnly(['order']) ||
+                      incoming().diff(existing()).affectedKeys().hasOnly(['name', 'order'])
+                    ) &&
                     incoming().createdAt == existing().createdAt;
       allow delete: if true;
     }

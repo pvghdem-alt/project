@@ -31,9 +31,11 @@ import {
   LogIn,
   LogOut,
   Image as ImageIcon,
-  FileUp
+  FileUp,
+  Copy,
+  GripVertical
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, Reorder } from 'motion/react';
 import Markdown from 'react-markdown';
 import { DESIGN_SPECS } from './constants';
 import { askAiAssistant, setCustomApiKey, analyzeNotesToRequirements, deduplicateData, analyzeFileToSpecs } from './geminiService';
@@ -49,7 +51,9 @@ import {
   doc, 
   orderBy,
   serverTimestamp,
-  writeBatch
+  writeBatch,
+  where,
+  getDocs
 } from 'firebase/firestore';
 
 enum OperationType {
@@ -141,6 +145,7 @@ interface Topic {
   name: string;
   isDefault?: boolean;
   floorId?: string;
+  order: number;
 }
 
 export default function App() {
@@ -152,12 +157,7 @@ export default function App() {
   const [isListening, setIsListening] = useState(false);
   
   // Custom Topics
-  const [customTopics, setCustomTopics] = useState<Topic[]>([
-    { id: 'def-1', name: '護理站', isDefault: true },
-    { id: 'def-2', name: '一般病房', isDefault: true },
-    { id: 'def-3', name: '保護室', isDefault: true },
-    { id: 'def-4', name: '公共活動區', isDefault: true }
-  ]);
+  const [customTopics, setCustomTopics] = useState<Topic[]>([]);
   const [showAddTopic, setShowAddTopic] = useState(false);
   const [newTopicName, setNewTopicName] = useState('');
 
@@ -279,21 +279,32 @@ export default function App() {
 
   // Firestore Sync: Topics
   useEffect(() => {
-    const q = query(collection(db, 'topics'), orderBy('createdAt', 'asc'));
+    const q = query(collection(db, 'topics'), orderBy('order', 'asc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({
         id: doc.id,
-        name: doc.data().name,
-        floorId: doc.data().floorId,
-        isDefault: false
+        ...doc.data()
       })) as Topic[];
-      const defaultTopics: Topic[] = [
-        { id: 'def-1', name: '護理站', isDefault: true },
-        { id: 'def-2', name: '一般病房', isDefault: true },
-        { id: 'def-3', name: '保護室', isDefault: true },
-        { id: 'def-4', name: '公共活動區', isDefault: true }
-      ];
-      setCustomTopics([...defaultTopics, ...data]);
+      
+      if (data.length === 0) {
+        // Seed default topics if nothing in DB
+        const defaultTopics = [
+          { name: '護理站', isDefault: true, order: 0 },
+          { name: '一般病房', isDefault: true, order: 1 },
+          { name: '保護室', isDefault: true, order: 2 },
+          { name: '公共活動區', isDefault: true, order: 3 }
+        ];
+        defaultTopics.forEach((t, i) => {
+          addDoc(collection(db, 'topics'), {
+            ...t,
+            createdAt: serverTimestamp(),
+            creatorId: 'system',
+            floorId: 'global' // Global defaults
+          });
+        });
+      } else {
+        setCustomTopics(data);
+      }
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, 'topics');
     });
@@ -763,13 +774,66 @@ export default function App() {
     }
   };
 
+  const handleCopyTopic = async (topic: Topic) => {
+    try {
+      const newName = `${topic.name} (複製)`;
+      const newTopicRef = await addDoc(collection(db, 'topics'), {
+        name: newName,
+        createdAt: serverTimestamp(),
+        creatorId: 'public',
+        floorId: topic.floorId,
+        order: (customTopics[customTopics.length - 1]?.order || 0) + 1,
+        isDefault: false
+      });
+
+      // Copy existing notes for this topic
+      const notesQ = query(collection(db, 'notes'), where('space', '==', topic.name));
+      const notesSnapshot = await getDocs(notesQ);
+      
+      if (!notesSnapshot.empty) {
+        const batch = writeBatch(db);
+        notesSnapshot.docs.forEach((noteDoc) => {
+          const data = noteDoc.data();
+          const newNoteRef = doc(collection(db, 'notes'));
+          batch.set(newNoteRef, {
+            ...data,
+            space: newName,
+            createdAt: serverTimestamp(),
+            timestamp: `${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+          });
+        });
+        await batch.commit();
+      }
+
+      setNotification({ message: `已複製空間「${newName}」並複製 ${notesSnapshot.size} 筆紀錄`, type: 'success' });
+      setTimeout(() => setNotification(null), 3000);
+    } catch (err) {
+      console.error(err);
+      setNotification({ message: '複製失敗', type: 'error' });
+      setTimeout(() => setNotification(null), 2000);
+    }
+  };
+
+  const handleReorderTopics = async (newOrder: Topic[]) => {
+    setCustomTopics(newOrder); // Optimistic update
+    try {
+      const batch = writeBatch(db);
+      newOrder.forEach((topic, i) => {
+        batch.update(doc(db, 'topics', topic.id), { order: i });
+      });
+      await batch.commit();
+    } catch (err) {
+      console.error("Reorder failed:", err);
+    }
+  };
+
   const handleAddTopic = async () => {
     const trimmedName = newTopicName.trim();
     if (!trimmedName) return;
 
     // Check if this name already exists in THIS floor or is a global default
     const isDuplicate = customTopics.some(t => 
-      t.name === trimmedName && (t.isDefault || t.floorId === activeFloor)
+      t.name === trimmedName && (t.isDefault || t.floorId === activeFloor || t.floorId === 'global')
     );
 
     if (isDuplicate) {
@@ -783,7 +847,9 @@ export default function App() {
         name: trimmedName,
         createdAt: serverTimestamp(),
         creatorId: 'public',
-        floorId: activeFloor
+        floorId: activeFloor,
+        order: (customTopics[customTopics.length - 1]?.order || 0) + 1,
+        isDefault: false
       });
       setNewTopicName('');
       setShowAddTopic(false);
@@ -940,7 +1006,9 @@ export default function App() {
                </div>
              )}
 
-             {customTopics.filter(t => t.isDefault || t.floorId === activeFloor).map((topic) => (
+             <Reorder.Group axis="y" values={customTopics.filter(t => t.isDefault || t.floorId === activeFloor || t.floorId === 'global')} onReorder={handleReorderTopics} className="space-y-1">
+                {customTopics.filter(t => t.isDefault || t.floorId === activeFloor || t.floorId === 'global').map((topic) => (
+                  <Reorder.Item key={topic.id} value={topic}>
                <NavItem 
                  key={topic.id}
                  icon={<Layout size={20} />} 
@@ -952,11 +1020,15 @@ export default function App() {
                  isEditing={editingTopicId === topic.id}
                  editValue={topicEditName}
                  onEditChange={setTopicEditName}
-                 onEditSubmit={() => handleUpdateTopic(topic.id)} // Fixed: was handleUpdateTopicName
+                 onEditSubmit={() => handleUpdateTopic(topic.id)}
                  onEditCancel={() => setEditingTopicId(null)}
-                 onDelete={!topic.isDefault ? () => handleDeleteTopic(topic.id, topic.name) : undefined} // Fixed: was handleDeleteTopic(topic)
+                 onDelete={!topic.isDefault ? () => handleDeleteTopic(topic.id, topic.name) : undefined}
+                 onCopy={() => handleCopyTopic(topic)}
+                 isSortable={true}
                />
-             ))}
+             </Reorder.Item>
+           ))}
+         </Reorder.Group>
           </div>
         </nav>
 
@@ -1480,7 +1552,9 @@ function NavItem({
   onEditChange,
   onEditSubmit,
   onEditCancel,
-  onDelete
+  onDelete,
+  onCopy,
+  isSortable
 }: { 
   icon: React.ReactNode, 
   label: string, 
@@ -1493,7 +1567,9 @@ function NavItem({
   onEditChange?: (val: string) => void,
   onEditSubmit?: () => void,
   onEditCancel?: () => void,
-  onDelete?: () => void
+  onDelete?: () => void,
+  onCopy?: () => void,
+  isSortable?: boolean
 }) {
   if (isEditing) {
     return (
@@ -1526,11 +1602,25 @@ function NavItem({
             : 'text-slate-500 hover:bg-black/5 hover:text-slate-700'
         } ${collapsed && 'justify-center'}`}
       >
+        {isSortable && !collapsed && (
+          <span className="text-slate-300 group-hover/nav:text-slate-500 cursor-grab active:cursor-grabbing">
+            <GripVertical size={14} />
+          </span>
+        )}
         <span className={`${active ? 'text-blue-500' : 'text-slate-500 group-hover:text-blue-600'} transition-colors shrink-0`}>{icon}</span>
         {!collapsed && <span className="truncate text-sm font-bold uppercase tracking-wider">{label}</span>}
       </button>
       {!collapsed && (
         <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1 opacity-0 group-hover/nav:opacity-100 transition-opacity">
+          {onCopy && !active && (
+            <button 
+              onClick={(e) => { e.stopPropagation(); onCopy(); }}
+              className="p-1 hover:bg-blue-500 hover:text-white text-slate-400 rounded-md transition-colors"
+              title="複製主題"
+            >
+              <Copy size={12} />
+            </button>
+          )}
           {!active && (
             <button 
               onClick={(e) => { e.stopPropagation(); onDoubleClick?.(); }}
