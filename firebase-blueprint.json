@@ -5,14 +5,15 @@
       "description": "記錄各樓層特定空間的討論意見、規格要求與決議狀態",
       "type": "object",
       "properties": {
-        "floor": { "type": "string", "enum": ["B3F", "B5F"], "description": "所屬樓層" },
+        "floor": { "type": "string", "description": "所屬樓層 ID" },
         "space": { "type": "string", "description": "討論的空間或主題名稱" },
         "content": { "type": "string", "description": "意見回饋內容" },
-        "timestamp": { "type": "string", "format": "date-time", "description": "紀錄時間戳記" },
+        "timestamp": { "type": "string", "description": "本地顯示時間串" },
+        "createdAt": { "type": "string", "description": "伺服器建立時間戳記" },
         "status": { "type": "string", "enum": ["pending", "confirmed"], "description": "處理狀態" },
         "authorId": { "type": "string", "description": "紀錄者的 UID" }
       },
-      "required": ["floor", "space", "content", "timestamp", "status", "authorId"]
+      "required": ["floor", "space", "content", "timestamp", "createdAt", "status", "authorId"]
     },
     "CustomTopic": {
       "title": "自定義討論事項",
@@ -20,10 +21,11 @@
       "type": "object",
       "properties": {
         "name": { "type": "string", "description": "主題名稱" },
-        "createdAt": { "type": "string", "format": "date-time", "description": "建立時間" },
-        "creatorId": { "type": "string", "description": "建立者的 UID" }
+        "createdAt": { "type": "string", "description": "建立時間" },
+        "creatorId": { "type": "string", "description": "建立者的 UID" },
+        "floorId": { "type": "string", "description": "所屬樓層 ID" }
       },
-      "required": ["name", "createdAt", "creatorId"]
+      "required": ["name", "createdAt", "creatorId", "floorId"]
     },
     "ProjectMap": {
       "title": "配置圖設置",

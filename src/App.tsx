@@ -37,7 +37,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import Markdown from 'react-markdown';
 import { DESIGN_SPECS } from './constants';
 import { askAiAssistant, setCustomApiKey, analyzeNotesToRequirements, deduplicateData, analyzeFileToSpecs } from './geminiService';
-import { db } from './lib/firebase';
+import { db, auth } from './lib/firebase';
 import { 
   collection, 
   query, 
@@ -51,6 +51,53 @@ import {
   serverTimestamp,
   writeBatch
 } from 'firebase/firestore';
+
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 type FloorKey = string;
 
@@ -148,6 +195,10 @@ export default function App() {
   const [isCleaning, setIsCleaning] = useState(false);
   const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
   const [topicEditName, setTopicEditName] = useState('');
+  const [editingFloorId, setEditingFloorId] = useState<string | null>(null);
+  const [floorEditName, setFloorEditName] = useState('');
+  const [deleteConfirm, setDeleteConfirm] = useState<{ id: string, name: string, type: 'topic' | 'floor' } | null>(null);
+  const [activeMainTab, setActiveMainTab] = useState<'discussion' | 'map'>('discussion');
   const [rightSidebarWidth, setRightSidebarWidth] = useState(400);
   const [expandedReqIds, setExpandedReqIds] = useState<string[]>([]);
   const [collapsedChatIndices, setCollapsedChatIndices] = useState<number[]>([]);
@@ -178,6 +229,8 @@ export default function App() {
           { id: 'B5F', name: 'B5F 精神科急性病房', viewerUrl: DESIGN_SPECS.B5F.viewerUrl, type: '3d', order: 2 }
         ]);
       }
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'maps');
     });
     return () => unsubscribe();
   }, []);
@@ -199,6 +252,8 @@ export default function App() {
       } else {
         setRequirements(defaults);
       }
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'requirements');
     });
     return () => unsubscribe();
   }, []);
@@ -216,6 +271,8 @@ export default function App() {
         ...doc.data()
       })) as Note[];
       setNotes(data);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'notes');
     });
     return () => unsubscribe();
   }, []);
@@ -227,6 +284,7 @@ export default function App() {
       const data = snapshot.docs.map(doc => ({
         id: doc.id,
         name: doc.data().name,
+        floorId: doc.data().floorId,
         isDefault: false
       })) as Topic[];
       const defaultTopics: Topic[] = [
@@ -236,6 +294,8 @@ export default function App() {
         { id: 'def-4', name: '公共活動區', isDefault: true }
       ];
       setCustomTopics([...defaultTopics, ...data]);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'topics');
     });
     return () => unsubscribe();
   }, []);
@@ -257,9 +317,7 @@ export default function App() {
       setNotification({ message: '紀錄已儲存！', type: 'success' });
       setTimeout(() => setNotification(null), 2000);
     } catch (err) {
-      console.error("Error adding note:", err);
-      setNotification({ message: '儲存發生錯誤', type: 'error' });
-      setTimeout(() => setNotification(null), 2000);
+      handleFirestoreError(err, OperationType.WRITE, 'notes');
     }
   };
 
@@ -320,6 +378,8 @@ export default function App() {
           addDoc(collection(db, 'checklist'), { text, checked: false, order: i, createdAt: serverTimestamp() });
         });
       }
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'checklist');
     });
     return () => unsubscribe();
   }, []);
@@ -638,67 +698,101 @@ export default function App() {
     }
   };
 
-  const handleAddTopic = async () => {
-    if (newTopicName.trim() && !customTopics.some(t => t.name === newTopicName.trim())) {
-      try {
-        await addDoc(collection(db, 'topics'), {
-          name: newTopicName.trim(),
-          createdAt: serverTimestamp(),
-          creatorId: 'public',
-          floorId: activeFloor
-        });
-        setNewTopicName('');
-        setShowAddTopic(false);
-      } catch (err) {
-        console.error("Error adding topic:", err);
-      }
-    }
-  };
-
-  const handleUpdateTopicName = async (topicId: string) => {
-    if (!topicEditName.trim()) {
-      setEditingTopicId(null);
-      return;
-    }
+  const handleUpdateTopic = async (id: string) => {
+    if (!topicEditName.trim()) return;
     try {
-      await updateDoc(doc(db, 'topics', topicId), {
-        name: topicEditName.trim()
-      });
+      await updateDoc(doc(db, 'topics', id), { name: topicEditName.trim() });
       setEditingTopicId(null);
-      setTopicEditName('');
       setNotification({ message: '空間名稱已更新', type: 'success' });
-      setTimeout(() => setNotification(null), 3000);
+      setTimeout(() => setNotification(null), 2000);
     } catch (err) {
-      console.error("Error updating topic name:", err);
+      console.error(err);
     }
   };
 
-  const handleDeleteTopic = async (topic: Topic) => {
-    if (topic.isDefault) {
-      setNotification({ message: '系統預設空間無法刪除', type: 'error' });
-      setTimeout(() => setNotification(null), 3000);
+  const handleDeleteTopic = (id: string, name: string) => {
+    setDeleteConfirm({ id, name, type: 'topic' });
+  };
+
+  const performDeleteTopic = async (id: string, name: string) => {
+    try {
+      if (selectedSpace === name) setSelectedSpace(null);
+      await deleteDoc(doc(db, 'topics', id));
+      
+      const topicNotes = notes.filter(n => n.space === name);
+      if (topicNotes.length > 0) {
+        const batch = writeBatch(db);
+        topicNotes.forEach(n => {
+          batch.delete(doc(db, 'notes', n.id));
+        });
+        await batch.commit();
+      }
+
+      setNotification({ message: '空間及相關紀錄已刪除', type: 'success' });
+      setTimeout(() => setNotification(null), 2000);
+      setDeleteConfirm(null);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleUpdateFloor = async (id: string) => {
+    if (!floorEditName.trim()) return;
+    try {
+      await updateDoc(doc(db, 'maps', id), { name: floorEditName.trim() });
+      setEditingFloorId(null);
+      setNotification({ message: '配置圖名稱已更新', type: 'success' });
+      setTimeout(() => setNotification(null), 2000);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDeleteFloor = (id: string, name: string) => {
+    setDeleteConfirm({ id, name, type: 'floor' });
+  };
+
+  const performDeleteFloor = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'maps', id));
+      setNotification({ message: '配置圖已刪除', type: 'success' });
+      setTimeout(() => setNotification(null), 2000);
+      setDeleteConfirm(null);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleAddTopic = async () => {
+    const trimmedName = newTopicName.trim();
+    if (!trimmedName) return;
+
+    // Check if this name already exists in THIS floor or is a global default
+    const isDuplicate = customTopics.some(t => 
+      t.name === trimmedName && (t.isDefault || t.floorId === activeFloor)
+    );
+
+    if (isDuplicate) {
+      setNotification({ message: '此空間名稱已存在', type: 'error' });
+      setTimeout(() => setNotification(null), 2000);
       return;
     }
-    
-    if (!confirm(`確定要刪除「${topic.name}」及其相關討論紀錄嗎？`)) return;
 
     try {
-      // Delete the topic record
-      await deleteDoc(doc(db, 'topics', topic.id));
-      
-      // Also delete notes associated with this topic (optional but cleaner)
-      const topicNotes = notes.filter(n => n.space === topic.name);
-      const batch = writeBatch(db);
-      topicNotes.forEach(n => {
-        batch.delete(doc(db, 'notes', n.id));
+      await addDoc(collection(db, 'topics'), {
+        name: trimmedName,
+        createdAt: serverTimestamp(),
+        creatorId: 'public',
+        floorId: activeFloor
       });
-      await batch.commit();
-
-      if (selectedSpace === topic.name) setSelectedSpace(null);
-      setNotification({ message: `空間「${topic.name}」已刪除`, type: 'success' });
-      setTimeout(() => setNotification(null), 3000);
+      setNewTopicName('');
+      setShowAddTopic(false);
+      setNotification({ message: `空間「${trimmedName}」已新增`, type: 'success' });
+      setTimeout(() => setNotification(null), 2000);
     } catch (err) {
-      console.error("Error deleting topic:", err);
+      console.error("Error adding topic:", err);
+      setNotification({ message: '新增失敗，請重試', type: 'error' });
+      setTimeout(() => setNotification(null), 2000);
     }
   };
 
@@ -788,6 +882,13 @@ export default function App() {
                  active={activeFloor === map.id} 
                  onClick={() => setActiveFloor(map.id)}
                  collapsed={!sidebarOpen}
+                 onDelete={() => handleDeleteFloor(map.id, map.name)}
+                 onDoubleClick={() => { setEditingFloorId(map.id); setFloorEditName(map.name); }}
+                 isEditing={editingFloorId === map.id}
+                 editValue={floorEditName}
+                 onEditChange={setFloorEditName}
+                 onEditSubmit={() => handleUpdateFloor(map.id)}
+                 onEditCancel={() => setEditingFloorId(null)}
                />
              ))}
              
@@ -805,31 +906,37 @@ export default function App() {
           <div className="mb-2">
              <div className="flex items-center justify-between px-4 mb-2">
                 <h3 className={`text-[10px] font-bold text-slate-400 uppercase tracking-widest ${!sidebarOpen && 'hidden'}`}>空間細部討論</h3>
-                {sidebarOpen && (
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); setShowAddTopic(!showAddTopic); }}
-                    className="p-1 hover:bg-black/5 rounded text-blue-500 transition-colors"
-                  >
-                    <Plus size={14} />
-                  </button>
-                )}
              </div>
 
+             <button 
+                onClick={() => setShowAddTopic(!showAddTopic)}
+                className={`w-full flex items-center gap-3 px-4 py-2 text-blue-500 hover:bg-blue-50 rounded-lg transition-colors mb-2 ${!sidebarOpen && 'justify-center'}`}
+             >
+                <PlusCircle size={18} />
+                {sidebarOpen && <span className="text-xs font-bold uppercase tracking-widest">新增設計空間</span>}
+             </button>
+
              {sidebarOpen && showAddTopic && (
-               <div className="mb-4 flex gap-2 px-2">
+               <div className="mb-4 flex flex-col gap-2 px-4 py-3 bg-blue-50/50 rounded-xl border border-blue-100 mx-2">
                  <input 
+                   autoFocus
                    type="text"
                    value={newTopicName}
                    onChange={(e) => setNewTopicName(e.target.value)}
-                   placeholder="輸入新空間名稱..."
-                   className="flex-1 bg-[#F2F2F7] border border-slate-300 rounded px-2 py-1.5 text-xs outline-none focus:border-blue-500/50"
+                   onKeyDown={(e) => e.key === 'Enter' && handleAddTopic()}
+                   placeholder="例如：會客室、配膳間..."
+                   className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500 transition-all"
                  />
-                 <button 
-                   onClick={handleAddTopic}
-                   className="bg-blue-500 text-white px-2 py-1.5 rounded text-xs font-bold"
-                 >
-                   新增
-                 </button>
+                 <div className="flex gap-2">
+                   <button 
+                     onClick={() => setShowAddTopic(false)}
+                     className="flex-1 py-1.5 text-xs text-slate-500 font-bold hover:bg-white rounded border border-slate-200"
+                   >取消</button>
+                   <button 
+                     onClick={handleAddTopic}
+                     className="flex-1 py-1.5 bg-blue-500 text-white rounded text-xs font-bold shadow-sm"
+                   >確認新增</button>
+                 </div>
                </div>
              )}
 
@@ -845,9 +952,9 @@ export default function App() {
                  isEditing={editingTopicId === topic.id}
                  editValue={topicEditName}
                  onEditChange={setTopicEditName}
-                 onEditSubmit={() => handleUpdateTopicName(topic.id)}
+                 onEditSubmit={() => handleUpdateTopic(topic.id)} // Fixed: was handleUpdateTopicName
                  onEditCancel={() => setEditingTopicId(null)}
-                 onDelete={!topic.isDefault ? () => handleDeleteTopic(topic) : undefined}
+                 onDelete={!topic.isDefault ? () => handleDeleteTopic(topic.id, topic.name) : undefined} // Fixed: was handleDeleteTopic(topic)
                />
              ))}
           </div>
@@ -893,28 +1000,19 @@ export default function App() {
                 <ExternalLink size={14} />
                 圖面比對
              </button>
-             <button 
-              onClick={handleAiSyncRequirements}
-              disabled={isAnalyzing}
-              className="flex items-center gap-2 text-sm text-white bg-blue-500 px-4 py-1.5 rounded hover:bg-blue-600 shadow-lg shadow-blue-500/20 active:scale-95 transition-all font-bold uppercase tracking-widest disabled:opacity-50"
-             >
-                {isAnalyzing ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                {isAnalyzing ? 'AI 分析中...' : '完成會議紀錄'}
-             </button>
           </div>
         </header>
 
         {/* Workspace */}
         <div className="flex-1 flex overflow-hidden">
-          {/* Left: Interactive Viewer */}
-          <div className="flex-1 overflow-auto bg-brand-bg p-6 flex flex-col gap-6">
+          <div className="flex-1 flex flex-col overflow-hidden bg-brand-bg p-6 relative">
             <AnimatePresence>
               {notification && (
                 <motion.div 
                   initial={{ opacity: 0, y: -20, x: '-50%' }}
                   animate={{ opacity: 1, y: 0, x: '-50%' }}
                   exit={{ opacity: 0, y: -20, x: '-50%' }}
-                  className={`absolute top-20 left-1/2 px-6 py-2 rounded-full font-bold text-base shadow-xl z-50 flex items-center gap-2 border ${
+                  className={`fixed top-20 left-1/2 px-6 py-3 rounded-full font-bold text-base shadow-2xl z-[100] flex items-center gap-2 border whitespace-nowrap ${
                     notification.type === 'ai' 
                       ? 'bg-purple-600 text-white border-purple-400' 
                       : notification.type === 'error'
@@ -928,154 +1026,203 @@ export default function App() {
                 </motion.div>
               )}
             </AnimatePresence>
-            <div className="glass-panel rounded-2xl overflow-hidden relative flex-[2] flex flex-col">
-              <div className="p-4 border-b border-slate-200 flex justify-between items-center z-10 bg-white/40">
-                 <div className="flex bg-slate-100/50 p-1 rounded">
-                    <button className="text-xs font-bold px-4 py-1.5 rounded bg-blue-500 text-white uppercase tracking-widest">配置圖</button>
-                    <button className="text-xs font-bold px-4 py-1.5 rounded text-slate-500 hover:text-slate-900 uppercase tracking-widest">工程標示</button>
-                 </div>
-                 <div className="flex items-center gap-2 text-xs font-bold text-slate-500 uppercase tracking-widest">
-                    <Info size={12} /> 圖面檢視
-                 </div>
-              </div>
-              <div className="flex-1 relative overflow-auto p-4 flex items-center justify-center">
-                <div className="relative w-full h-full opacity-90 transition-opacity">
-                  {activeMap.type === '3d' ? (
-                    <iframe 
-                      src={activeMap.viewerUrl}
-                      className="w-full h-full border-0 rounded-lg"
-                      title={`${activeMap.name} 3D Floor Plan`}
-                    />
-                  ) : (
-                    <img 
-                      src={activeMap.viewerUrl} 
-                      alt={activeMap.name}
-                      className="w-full h-auto object-contain transition-transform"
-                      referrerPolicy="no-referrer"
-                    />
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
 
-          {/* Right: Discussion Panel */}
-          <div 
-            onMouseDown={() => setIsResizing(true)}
-            className="w-1 cursor-col-resize bg-slate-100 hover:bg-blue-500/50 transition-colors shrink-0 z-20"
-          />
-          <aside 
-            style={{ width: rightSidebarWidth }}
-            className="border-l border-slate-200 bg-white/30 flex flex-col shrink-0 overflow-hidden backdrop-blur-xl transition-[width] duration-0"
-          >
-            <div className="flex-1 overflow-y-auto p-6 space-y-8 scroll-smooth">
-              {!selectedSpace ? (
-                <div className="flex items-center justify-center h-full text-slate-500 text-sm">
-                  請選擇一個空間進行細部討論
+            {/* Tab Navigation */}
+            <div className="flex items-center justify-between mb-4 shrink-0">
+               <div className="flex p-1 bg-slate-200/50 rounded-xl backdrop-blur-sm border border-slate-200 shadow-sm">
+                  <button 
+                    onClick={() => setActiveMainTab('discussion')}
+                    className={`flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold transition-all duration-300 ${
+                      activeMainTab === 'discussion' 
+                        ? 'bg-white text-blue-600 shadow-lg' 
+                        : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    <MessageSquare size={16} />
+                    討論紀錄
+                  </button>
+                  <button 
+                    onClick={() => setActiveMainTab('map')}
+                    className={`flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold transition-all duration-300 ${
+                      activeMainTab === 'map' 
+                        ? 'bg-white text-blue-600 shadow-lg' 
+                        : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    <MapIcon size={16} />
+                    配置圖
+                  </button>
+               </div>
+               
+               {activeMainTab === 'discussion' && selectedSpace && (
+                  <div className="flex items-center gap-3">
+                    <button 
+                      onClick={handleCompleteMeeting}
+                      disabled={isCleaning}
+                      className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 disabled:opacity-50 transition-all shadow-md shadow-blue-500/20"
+                    >
+                      {isCleaning ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                      AI 彙整至工程規範
+                    </button>
+                  </div>
+               )}
+            </div>
+
+            {/* Main Content Pane */}
+            <div className="flex-1 glass-panel rounded-3xl overflow-hidden shadow-2xl border border-white/40 relative flex flex-col">
+              {activeMainTab === 'map' ? (
+                <div className="flex-1 relative overflow-hidden flex flex-col">
+                  <div className="p-4 border-b border-slate-100 bg-white/50 backdrop-blur-md flex justify-between items-center z-10 shrink-0">
+                    <div className="flex items-center gap-2 text-xs font-bold text-slate-500 uppercase tracking-widest px-2">
+                       <Info size={14} className="text-blue-500" /> 圖面即時檢視
+                    </div>
+                  </div>
+                  <div className="flex-1 relative overflow-auto p-4 flex items-center justify-center bg-brand-bg/30">
+                    <div className="relative w-full h-full opacity-90 transition-opacity">
+                      {activeMap.type === '3d' ? (
+                        <iframe 
+                          src={activeMap.viewerUrl}
+                          className="w-full h-full border-0 rounded-2xl shadow-inner bg-slate-100"
+                          title={`${activeMap.name} 3D Floor Plan`}
+                        />
+                      ) : (
+                        <img 
+                          src={activeMap.viewerUrl} 
+                          alt={activeMap.name}
+                          className="w-full h-auto object-contain transition-transform"
+                          referrerPolicy="no-referrer"
+                        />
+                      )}
+                    </div>
+                  </div>
                 </div>
               ) : (
-                <AnimatePresence mode="wait">
-                  <motion.div 
-                    initial={{ opacity: 0, x: 20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -20 }}
-                    className="space-y-6"
-                  >
-                    <div className="flex items-center justify-between">
-                       <h3 className="font-light text-3xl text-slate-900 tracking-tight">{selectedSpace} 討論紀錄</h3>
-                       <button onClick={() => setSelectedSpace(null)} className="p-2 hover:bg-black/5 rounded-full text-slate-500"><X size={20} /></button>
+                <div className="flex-1 overflow-y-auto custom-scrollbar bg-white/50">
+                  {!selectedSpace ? (
+                    <div className="flex flex-col items-center justify-center h-full text-slate-400 space-y-4">
+                      <div className="bg-slate-100 p-6 rounded-full">
+                        <Layout size={48} className="text-slate-300" />
+                      </div>
+                      <p className="text-lg font-medium">請從左側選單選擇一個空間進行討論</p>
                     </div>
-
-                    {/* Requirements Alert */}
-                    <div className="bg-blue-500/5 border border-blue-500/20 rounded-2xl p-5 space-y-3">
-                       <div className="flex items-center justify-between">
-                          <span className="text-xs font-bold text-blue-600 uppercase tracking-widest">Spec Requirement</span>
-                       </div>
-                       <ul className="space-y-3">
-                          {requirements.find(k => k.title === selectedSpace || k.title.includes(selectedSpace || '') || (selectedSpace === '一般病房' && k.title.includes('病房')) || (selectedSpace === '公共活動區' && k.title.includes('公共')) )?.points.map((p, i) => {
-                            // Extract category prefix if exists
-                            const match = p.match(/^【(.*?)】(.*)/);
-                            if (match) {
-                               return (
-                                 <li key={i} className="flex gap-3 text-base text-slate-700 leading-relaxed font-light">
-                                    <div className="shrink-0 mt-1">
-                                      <span className="text-xs font-bold bg-blue-500 text-white px-2 py-0.5 rounded uppercase">{match[1]}</span>
-                                    </div>
-                                    <p>{match[2].trim().replace(/^[:：]/, '').trim()}</p>
-                                 </li>
-                               );
-                            }
-                            return (
-                               <li key={i} className="flex gap-3 text-base text-slate-500 leading-relaxed font-light">
-                                  <CheckCircle2 size={14} className="text-blue-500 shrink-0 mt-1" />
-                                  <p>{p}</p>
-                               </li>
-                            );
-                          }) || <p className="text-base text-slate-500 italic">無特定規範，請討論一般設計細節</p>}
-                       </ul>
-                    </div>
-
-                    {/* Feedback Form */}
-                    <div className="space-y-4">
-                      <div className="flex justify-between items-end">
-                        <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">護理長意見紀錄</label>
+                  ) : (
+                    <div className="h-full flex flex-col p-6 lg:p-8 space-y-6">
+                      <div className="flex items-center justify-between pb-4 border-b border-slate-100 shrink-0">
+                        <div>
+                          <h3 className="text-3xl font-black text-slate-900 tracking-tight">{selectedSpace}</h3>
+                          <p className="text-sm text-slate-500 font-medium">空間細部設計與討論紀錄匯總</p>
+                        </div>
                         <button 
-                          onClick={startVoiceToText}
-                          className={`text-xs font-bold hover:underline cursor-pointer flex items-center gap-1 transition-all ${isListening ? 'text-red-500 animate-pulse' : 'text-blue-500'}`}
+                          onClick={() => setSelectedSpace(null)} 
+                          className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-xl transition-colors"
                         >
-                          <Sparkles size={12} /> {isListening ? '收音中...' : 'AI 語音轉文字'}
+                          <X size={20} />
                         </button>
                       </div>
-                      <textarea 
-                        value={newNote}
-                        onChange={(e) => setNewNote(e.target.value)}
-                        placeholder="記錄意見回饋..."
-                        className="w-full h-40 p-5 bg-[#F2F2F7] border border-slate-300 rounded-xl text-base text-slate-900 focus:border-blue-500/50 outline-none resize-none transition-all placeholder:text-slate-500"
-                      />
-                      <button 
-                        onClick={handleAddNote}
-                        disabled={!newNote.trim()}
-                        className="w-full py-4 bg-blue-500 text-white rounded-lg font-bold shadow-lg shadow-blue-500/20 hover:bg-blue-600 disabled:opacity-50 transition-all active:scale-95 text-sm uppercase tracking-widest"
-                      >
-                        儲存討論進度
-                      </button>
-                    </div>
 
-                    {/* Local History */}
-                    <div className="space-y-4 pt-4 border-t border-slate-200">
-                       <div className="flex items-center justify-between">
-                         <h4 className="text-xs font-bold text-slate-500 uppercase tracking-widest">當前會議紀錄</h4>
-                         <button 
-                           onClick={handleCompleteMeeting}
-                           disabled={isCleaning}
-                           className="flex items-center gap-2 px-3 py-1.5 bg-blue-500 text-white rounded text-xs font-bold hover:bg-blue-600 disabled:opacity-50 transition-all active:scale-95 shadow-sm"
-                         >
-                           {isCleaning ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                           完成會議紀錄
-                         </button>
-                       </div>
-                       {notes.filter(n => n.space === selectedSpace && n.floor === activeFloor).length === 0 ? (
-                         <div className="text-center py-12 px-4 glass-panel border-dashed rounded-xl">
-                            <MessageSquare size={32} className="mx-auto text-slate-800 mb-3" />
-                            <p className="text-sm text-slate-500 italic">目前無紀錄</p>
-                         </div>
-                       ) : (
-                         notes.filter(n => n.space === selectedSpace && n.floor === activeFloor).map(n => (
-                           <NoteItem 
-                            key={n.id} 
-                            note={n} 
-                            onToggleStatus={handleToggleNoteStatus}
-                            onDelete={handleDeleteNote}
-                            onEdit={(note) => setEditingNote(note)}
-                           />
-                         ))
-                       )}
+                      <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[1fr,1.2fr] gap-6 lg:gap-8 overflow-hidden">
+                        {/* Requirements - Scrollable */}
+                        <div className="flex flex-col h-full min-h-[300px]">
+                          <div className="bg-blue-600/5 border border-blue-500/10 rounded-2xl p-6 h-full overflow-y-auto custom-scrollbar">
+                            <div className="flex justify-between items-center mb-6 sticky top-0 bg-transparent backdrop-blur-sm pb-2">
+                              <h4 className="text-xs font-black text-blue-600 uppercase tracking-widest flex items-center gap-2">
+                                <ShieldAlert size={14} /> 細部設計規範
+                              </h4>
+                              <button 
+                                onClick={() => {
+                                  const req = requirements.find(k => k.title === selectedSpace || k.title.includes(selectedSpace || ''));
+                                  if (req) setEditingReq({ id: req.id, title: req.title, points: req.points });
+                                }}
+                                className="text-[10px] font-black text-blue-400 hover:text-blue-600 transition-colors bg-white px-2 py-1 rounded-full shadow-sm"
+                              >
+                                手動編輯
+                              </button>
+                            </div>
+                            <div className="space-y-6">
+                              {(() => {
+                                const filtered = requirements.filter(k => 
+                                  k.title === selectedSpace || 
+                                  k.title.includes(selectedSpace || '') || 
+                                  (selectedSpace === '一般病房' && k.title.includes('病房')) || 
+                                  (selectedSpace === '保護室' && k.title.includes('保護室')) ||
+                                  (selectedSpace === '公共活動區' && k.title.includes('公共'))
+                                );
+
+                                if (filtered.length === 0) return <p className="text-slate-500 text-sm italic">無特定規範，請討論一般設計細節</p>;
+
+                                return filtered.map((cat, idx) => (
+                                  <div key={idx} className="space-y-3">
+                                    <h5 className="text-[10px] font-black text-blue-500/70 border-l-4 border-blue-500 pl-3 py-0.5">
+                                      {cat.title}
+                                    </h5>
+                                    <ul className="space-y-2.5 pl-1">
+                                      {cat.points.map((p, i) => (
+                                        <li key={i} className="flex gap-2.5 text-sm text-slate-700 leading-relaxed group">
+                                          <div className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0 mt-2 transition-transform group-hover:scale-125" />
+                                          <p className="flex-1">{p}</p>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                ));
+                              })()}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Note area - Right side */}
+                        <div className="flex flex-col h-full space-y-6 overflow-hidden">
+                          <div className="space-y-3 shrink-0">
+                            <div className="flex justify-between items-center">
+                              <label className="text-xs font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                                <MessageSquare size={14} /> 意見與回饋
+                              </label>
+                              <button 
+                                onClick={startVoiceToText}
+                                className={`text-[10px] font-bold flex items-center gap-2 px-3 py-1.5 rounded-full transition-all ${isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-blue-50 text-blue-500 hover:bg-blue-100'}`}
+                              >
+                                <Sparkles size={12} /> {isListening ? '收音中...' : '語音輸入'}
+                              </button>
+                            </div>
+                            <textarea 
+                              value={newNote}
+                              onChange={(e) => setNewNote(e.target.value)}
+                              placeholder="在此輸入討論細節、變更要求..."
+                              className="w-full h-32 p-4 bg-slate-50 border border-slate-200 rounded-2xl text-base text-slate-900 focus:bg-white focus:border-blue-500 shadow-inner outline-none resize-none transition-all placeholder:text-slate-400"
+                            />
+                            <button 
+                              onClick={handleAddNote}
+                              disabled={!newNote.trim()}
+                              className="w-full py-3.5 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-xl font-black shadow-lg shadow-blue-500/20 hover:shadow-blue-500/40 hover:-translate-y-0.5 disabled:opacity-50 disabled:translate-y-0 transition-all active:scale-95 text-sm tracking-widest uppercase"
+                            >
+                              送出討論內容
+                            </button>
+                          </div>
+
+                          <div className="flex-1 min-h-0 flex flex-col space-y-3 overflow-hidden">
+                            <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 px-2 shrink-0">
+                              <RotateCcw size={14} /> 歷史討論紀錄
+                            </h4>
+                            <div className="flex-1 overflow-y-auto custom-scrollbar relative px-2">
+                              <div className="absolute left-6 top-0 bottom-0 w-px bg-slate-100 z-0" />
+                              <div className="relative z-10">
+                                <NotesArchived 
+                                  notes={notes.filter(n => n.space === selectedSpace && n.floor === activeFloor)}
+                                  onToggleStatus={handleToggleNoteStatus}
+                                  onDelete={handleDeleteNote}
+                                  onEdit={(note) => setEditingNote(note)}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                  </motion.div>
-                </AnimatePresence>
+                  )}
+                </div>
               )}
             </div>
-</aside>
+          </div>
         </div>
       </main>
 
@@ -1266,6 +1413,57 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* Custom Confirmation Modal */}
+      <AnimatePresence>
+        {deleteConfirm && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setDeleteConfirm(null)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="relative w-full max-w-sm bg-white rounded-3xl shadow-2xl overflow-hidden p-8"
+            >
+              <div className="bg-red-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6">
+                <X size={32} className="text-red-500" />
+              </div>
+              <h3 className="text-xl font-black text-center text-slate-900 mb-2">確認刪除？</h3>
+              <p className="text-center text-slate-500 mb-8 leading-relaxed">
+                您確定要刪除 <span className="font-bold text-slate-800">「{deleteConfirm.name}」</span> 嗎？
+                {deleteConfirm.type === 'topic' && <><br /><span className="text-xs text-red-500">所有相關的討論紀錄也將一併移除。</span></>}
+                此操作無法復原。
+              </p>
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => setDeleteConfirm(null)}
+                  className="flex-1 py-3 px-4 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200 transition-colors"
+                >
+                  取消
+                </button>
+                <button 
+                  onClick={() => {
+                    if (deleteConfirm.type === 'topic') {
+                      performDeleteTopic(deleteConfirm.id, deleteConfirm.name);
+                    } else {
+                      performDeleteFloor(deleteConfirm.id);
+                    }
+                  }}
+                  className="flex-1 py-3 px-4 bg-red-500 text-white font-bold rounded-xl hover:bg-red-600 transition-colors shadow-lg shadow-red-500/30"
+                >
+                  確定刪除
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -1331,13 +1529,27 @@ function NavItem({
         <span className={`${active ? 'text-blue-500' : 'text-slate-500 group-hover:text-blue-600'} transition-colors shrink-0`}>{icon}</span>
         {!collapsed && <span className="truncate text-sm font-bold uppercase tracking-wider">{label}</span>}
       </button>
-      {!collapsed && onDelete && !active && (
-        <button 
-          onClick={(e) => { e.stopPropagation(); onDelete(); }}
-          className="absolute right-2 top-1/2 -translate-y-1/2 p-1 bg-red-500 text-white rounded-md opacity-0 group-hover/nav:opacity-100 transition-opacity"
-        >
-          <X size={12} />
-        </button>
+      {!collapsed && (
+        <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1 opacity-0 group-hover/nav:opacity-100 transition-opacity">
+          {!active && (
+            <button 
+              onClick={(e) => { e.stopPropagation(); onDoubleClick?.(); }}
+              className="p-1 hover:bg-blue-500 hover:text-white text-slate-400 rounded-md transition-colors"
+              title="編輯名稱"
+            >
+              <FileText size={12} />
+            </button>
+          )}
+          {onDelete && !active && (
+            <button 
+              onClick={(e) => { e.stopPropagation(); onDelete(); }}
+              className="p-1 hover:bg-red-500 hover:text-white text-slate-400 rounded-md transition-colors"
+              title="刪除"
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -1368,49 +1580,123 @@ function Hotspot({ label, color = "blue", onClick }: { label: string, color?: st
 function NoteItem({ note, showLabel = false, onToggleStatus, onDelete, onEdit }: { note: Note, showLabel?: boolean, onToggleStatus: (id: string, current: string) => void, onDelete: (id: string) => void, onEdit: (note: Note) => void }) {
   return (
     <motion.div 
-      initial={{ opacity: 0, y: 10 }}
+      initial={{ opacity: 0, y: 5 }}
       animate={{ opacity: 1, y: 0 }}
-      className={`p-4 glass-panel rounded-xl hover:bg-black/5 transition-all group border-l-2 ${note.status === 'confirmed' ? 'border-l-emerald-500' : 'border-l-blue-500/50'}`}
+      className={`p-3 glass-panel rounded-xl hover:bg-black/5 transition-all group border-l-2 mb-2 ${note.status === 'confirmed' ? 'border-l-emerald-500' : 'border-l-blue-500/50'}`}
     >
-      <div className="flex justify-between items-start mb-2">
+      <div className="flex justify-between items-start mb-1">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-bold uppercase tracking-widest text-slate-500">{note.timestamp}</span>
+          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{note.timestamp.split(' ')[1] || note.timestamp}</span>
           {note.status === 'confirmed' && (
-            <span className="text-[10px] font-black bg-emerald-500 text-white px-1.5 rounded uppercase tracking-tighter">Confirmed</span>
+            <span className="text-[9px] font-black bg-emerald-500 text-white px-1.5 rounded uppercase tracking-tighter">Confirmed</span>
           )}
         </div>
         <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
            <button 
             onClick={() => onToggleStatus(note.id, note.status)}
-            className={`${note.status === 'confirmed' ? 'text-emerald-500' : 'text-slate-500 hover:text-emerald-400'} p-1`}
+            className={`${note.status === 'confirmed' ? 'text-emerald-500' : 'text-slate-500 hover:text-emerald-400'} p-0.5`}
             title="確認狀態"
            >
-            <CheckCircle2 size={12} />
+            <CheckCircle2 size={10} />
            </button>
            <button 
             onClick={() => onEdit(note)}
-            className="text-slate-500 hover:text-blue-600 p-1"
+            className="text-slate-500 hover:text-blue-600 p-0.5"
             title="編輯內容"
            >
-            <FileText size={12} />
+            <FileText size={10} />
            </button>
            <button 
             onClick={() => onDelete(note.id)}
-            className="text-slate-500 hover:text-red-500 p-1"
+            className="text-slate-500 hover:text-red-500 p-0.5"
             title="刪除紀錄"
            >
-            <X size={12} />
+            <X size={10} />
            </button>
         </div>
       </div>
       {showLabel && (
-        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-blue-500/10 text-blue-600 text-[10px] font-bold rounded mb-3 tracking-widest uppercase border border-blue-500/20">
+        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-blue-500/10 text-blue-600 text-[10px] font-bold rounded mb-2 tracking-widest uppercase border border-blue-500/20">
           {note.floor} • {note.space}
         </span>
       )}
-      <p className={`text-sm leading-relaxed italic tracking-wide ${note.status === 'confirmed' ? 'text-slate-900 font-medium' : 'text-slate-700 font-light'}`}>
-        「{note.content}」
+      <p className={`text-sm leading-relaxed tracking-wide ${note.status === 'confirmed' ? 'text-slate-900 font-medium' : 'text-slate-700 font-light'}`}>
+        {note.content}
       </p>
     </motion.div>
+  );
+}
+
+function NotesArchived({ notes, onToggleStatus, onDelete, onEdit }: { notes: Note[], onToggleStatus: any, onDelete: any, onEdit: any }) {
+  const [expandedDates, setExpandedDates] = useState<string[]>([]);
+
+  // Group by date
+  const grouped = notes.reduce((acc: Record<string, Note[]>, note) => {
+    const date = note.timestamp.split(' ')[0] || 'Unknown Date';
+    if (!acc[date]) acc[date] = [];
+    acc[date].push(note);
+    return acc;
+  }, {});
+
+  const dates = Object.keys(grouped).sort((a, b) => b.localeCompare(a));
+
+  useEffect(() => {
+    // Expand latest date by default
+    if (dates.length > 0 && expandedDates.length === 0) {
+      setExpandedDates([dates[0]]);
+    }
+  }, [dates]);
+
+  const toggleDate = (date: string) => {
+    setExpandedDates(prev => prev.includes(date) ? prev.filter(d => d !== date) : [...prev, date]);
+  };
+
+  if (notes.length === 0) {
+    return (
+      <div className="text-center py-12 px-4 glass-panel border-dashed rounded-xl">
+        <MessageSquare size={32} className="mx-auto text-slate-800 mb-3" />
+        <p className="text-sm text-slate-500 italic">目前無紀錄</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {dates.map(date => (
+        <div key={date} className="space-y-2">
+          <button 
+            onClick={() => toggleDate(date)}
+            className="w-full flex items-center justify-between py-2 border-b border-slate-100 hover:bg-black/5 px-2 rounded transition-colors group"
+          >
+            <div className="flex items-center gap-2">
+               <span className={`text-xs font-bold ${expandedDates.includes(date) ? 'text-blue-600' : 'text-slate-500'}`}>📅 {date}</span>
+               <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-full group-hover:bg-blue-100 group-hover:text-blue-600 transition-colors">{grouped[date].length}</span>
+            </div>
+            <ChevronRight size={14} className={`text-slate-400 transition-transform ${expandedDates.includes(date) ? 'rotate-90' : ''}`} />
+          </button>
+          
+          <AnimatePresence>
+            {expandedDates.includes(date) && (
+              <motion.div 
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="overflow-hidden space-y-2 pl-2"
+              >
+                {grouped[date].map(note => (
+                  <NoteItem 
+                    key={note.id} 
+                    note={note} 
+                    onToggleStatus={onToggleStatus} 
+                    onDelete={onDelete} 
+                    onEdit={onEdit} 
+                  />
+                ))}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      ))}
+    </div>
   );
 }

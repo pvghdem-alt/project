@@ -7,16 +7,22 @@ service cloud.firestore {
     }
 
     // Global helpers
-    function isValidId(id) { return id is string && id.size() <= 128; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
     function incoming() { return request.resource.data; }
     function existing() { return resource.data; }
+    function isSignedIn() { return request.auth != null; }
 
     // DiscussionNote Validation
     function isValidNote(data) {
-      return data.floor in ['B3F', 'B5F'] &&
-             data.space is string && data.space.size() > 0 && data.space.size() <= 100 &&
-             data.content is string && data.content.size() > 0 && data.content.size() <= 2000 &&
-             data.status in ['pending', 'confirmed'];
+      return data.keys().hasAll(['floor', 'space', 'content', 'timestamp', 'createdAt', 'status', 'authorId']) &&
+             data.keys().size() == 7 &&
+             data.floor is string && data.floor.size() <= 128 &&
+             data.space is string && data.space.size() <= 200 &&
+             data.content is string && data.content.size() <= 10000 &&
+             data.timestamp is string && data.timestamp.size() <= 100 &&
+             data.createdAt == request.time &&
+             data.status in ['pending', 'confirmed'] &&
+             data.authorId is string;
     }
 
     match /notes/{noteId} {
@@ -26,28 +32,32 @@ service cloud.firestore {
       allow update: if isValidNote(incoming()) && (
         incoming().diff(existing()).affectedKeys().hasOnly(['status']) ||
         incoming().diff(existing()).affectedKeys().hasOnly(['content', 'status'])
-      );
+      ) && incoming().createdAt == existing().createdAt;
       allow delete: if true;
     }
 
     // CustomTopic Validation
     function isValidTopic(data) {
-      return data.name is string && data.name.size() > 0 && data.name.size() <= 50;
+      return data.keys().hasAll(['name', 'createdAt', 'creatorId', 'floorId']) &&
+             data.keys().size() == 4 &&
+             data.name is string && data.name.size() <= 100 &&
+             data.createdAt == request.time &&
+             data.creatorId is string &&
+             data.floorId is string;
     }
 
     match /topics/{topicId} {
-      allow read: if true;
-      allow list: if true;
+      allow read, list: if true;
       allow create: if isValidId(topicId) && isValidTopic(incoming());
-      allow update: if isValidTopic(incoming()) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'createdAt']);
+      allow update: if isValidTopic(incoming()) && 
+                    incoming().diff(existing()).affectedKeys().hasOnly(['name']) &&
+                    incoming().createdAt == existing().createdAt;
       allow delete: if true;
     }
 
     match /maps/{mapId} {
       allow read: if true;
-      allow create: if true;
-      allow update: if true;
-      allow delete: if true;
+      allow write: if true;
     }
 
     match /requirements/{reqId} {
