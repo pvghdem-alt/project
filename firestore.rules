@@ -37,9 +37,10 @@ service cloud.firestore {
 
     // CustomTopic Validation
     function isValidTopic(data) {
-      return data.keys().hasAll(['name', 'createdAt', 'creatorId', 'floorId', 'order', 'isDefault']) &&
-             data.keys().size() == 6 &&
+      return data.keys().hasAll(['name', 'createdAt', 'creatorId', 'floorId', 'order', 'isDefault', 'type']) &&
+             data.keys().size() == 7 &&
              data.name is string && data.name.size() <= 100 &&
+             data.type in ['space', 'trade'] &&
              data.creatorId is string &&
              data.floorId is string &&
              data.order is number &&
@@ -55,7 +56,10 @@ service cloud.firestore {
                       incoming().diff(existing()).affectedKeys().hasOnly(['order']) ||
                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'order'])
                     ) &&
-                    incoming().createdAt == existing().createdAt;
+                    incoming().createdAt == existing().createdAt &&
+                    incoming().creatorId == existing().creatorId &&
+                    (existing().get('type', 'space') == incoming().type) &&
+                    incoming().isDefault == existing().isDefault;
       allow delete: if true;
     }
 

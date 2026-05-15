@@ -755,13 +755,45 @@ export default function App() {
 
   const handleUpdateTopic = async (id: string) => {
     if (!topicEditName.trim()) return;
+    const oldTopic = customTopics.find(t => t.id === id);
+    if (!oldTopic) return;
+    const oldName = oldTopic.name;
+    const newName = topicEditName.trim();
+
     try {
-      await updateDoc(doc(db, 'topics', id), { name: topicEditName.trim() });
+      await updateDoc(doc(db, 'topics', id), { name: newName });
+      
+      // Update requirements linked to this space
+      const reqsQ = query(collection(db, 'requirements'), where('space', '==', oldName));
+      const reqsSnapshot = await getDocs(reqsQ);
+      
+      const batch = writeBatch(db);
+      if (!reqsSnapshot.empty) {
+        reqsSnapshot.docs.forEach(d => {
+          batch.update(d.ref, { space: newName });
+        });
+      }
+
+      // Also update notes linked to this space to avoid losing history linkage
+      const notesQ = query(collection(db, 'notes'), where('space', '==', oldName));
+      const notesSnapshot = await getDocs(notesQ);
+      if (!notesSnapshot.empty) {
+        notesSnapshot.docs.forEach(d => {
+          batch.update(d.ref, { space: newName });
+        });
+      }
+
+      await batch.commit();
+
+      if (selectedSpace === oldName) setSelectedSpace(newName);
+
       setEditingTopicId(null);
-      setNotification({ message: '空間名稱已更新', type: 'success' });
+      setNotification({ message: '空間名稱及相關數據已更新', type: 'success' });
       setTimeout(() => setNotification(null), 2000);
     } catch (err) {
       console.error(err);
+      setNotification({ message: '更新失敗', type: 'error' });
+      setTimeout(() => setNotification(null), 2000);
     }
   };
 
@@ -821,35 +853,35 @@ export default function App() {
   const handleCopyTopic = async (topic: Topic) => {
     try {
       const newName = `${topic.name} (複製)`;
-      const newTopicRef = await addDoc(collection(db, 'topics'), {
+      await addDoc(collection(db, 'topics'), {
         name: newName,
         createdAt: serverTimestamp(),
         creatorId: 'public',
         floorId: topic.floorId,
         order: (customTopics[customTopics.length - 1]?.order || 0) + 1,
-        isDefault: false
+        isDefault: false,
+        type: topic.type || 'space'
       });
 
-      // Copy existing notes for this topic
-      const notesQ = query(collection(db, 'notes'), where('space', '==', topic.name));
-      const notesSnapshot = await getDocs(notesQ);
+      // Copy requirements ONLY
+      const reqsQ = query(collection(db, 'requirements'), where('space', '==', topic.name));
+      const reqsSnapshot = await getDocs(reqsQ);
       
-      if (!notesSnapshot.empty) {
+      if (!reqsSnapshot.empty) {
         const batch = writeBatch(db);
-        notesSnapshot.docs.forEach((noteDoc) => {
-          const data = noteDoc.data();
-          const newNoteRef = doc(collection(db, 'notes'));
-          batch.set(newNoteRef, {
+        reqsSnapshot.docs.forEach((reqDoc) => {
+          const data = reqDoc.data();
+          const newReqRef = doc(collection(db, 'requirements'));
+          batch.set(newReqRef, {
             ...data,
             space: newName,
-            createdAt: serverTimestamp(),
-            timestamp: `${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+            updatedAt: serverTimestamp()
           });
         });
         await batch.commit();
       }
 
-      setNotification({ message: `已複製空間「${newName}」並複製 ${notesSnapshot.size} 筆紀錄`, type: 'success' });
+      setNotification({ message: `已複製空間「${newName}」並同步細部規範項目`, type: 'success' });
       setTimeout(() => setNotification(null), 3000);
     } catch (err) {
       console.error(err);
@@ -975,7 +1007,10 @@ export default function App() {
             <div className="bg-blue-500 p-2 rounded-lg text-white">
               <Building2 size={24} />
             </div>
-            <h1 className="font-light text-2xl tracking-tight text-slate-900 uppercase">龍泉院區</h1>
+            <div>
+              <h1 className="font-black text-lg tracking-tight text-slate-900 leading-tight">龍泉分院</h1>
+              <p className="text-[10px] font-bold text-blue-600 uppercase tracking-widest leading-none">B棟3F、5F改建工程討論平台</p>
+            </div>
           </div>
           <button onClick={toggleSidebar} className="p-2 hover:bg-black/5 rounded-lg text-slate-500">
             {sidebarOpen ? <Menu size={20} /> : <ChevronRight size={20} />}
