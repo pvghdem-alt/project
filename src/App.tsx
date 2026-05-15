@@ -1167,94 +1167,104 @@ export default function App() {
             </div>
 
             {/* Main Content Pane */}
-            <div className="flex-1 glass-panel rounded-3xl overflow-hidden shadow-2xl border border-white/40 relative flex flex-col">
-              {activeMainTab === 'map' ? (
-                <div className="flex-1 relative overflow-hidden flex flex-col">
-                  <div className="p-4 border-b border-slate-100 bg-white/50 backdrop-blur-md flex justify-between items-center z-10 shrink-0">
-                    <div className="flex items-center gap-2 text-xs font-bold text-slate-500 uppercase tracking-widest px-2">
-                       <Info size={14} className="text-blue-500" /> 圖面即時檢視
-                    </div>
-                  </div>
-                  <div className="flex-1 relative overflow-auto p-4 flex items-center justify-center bg-brand-bg/30">
-                    <div className="relative w-full h-full opacity-90 transition-opacity">
-                      {activeMap.type === '3d' ? (
-                        <iframe 
-                          src={activeMap.viewerUrl}
-                          className="w-full h-full border-0 rounded-2xl shadow-inner bg-slate-100"
-                          title={`${activeMap.name} 3D Floor Plan`}
-                        />
-                      ) : (
-                        <img 
-                          src={activeMap.viewerUrl} 
-                          alt={activeMap.name}
-                          className="w-full h-auto object-contain transition-transform"
-                          referrerPolicy="no-referrer"
-                        />
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex-1 overflow-y-auto custom-scrollbar bg-white/50">
-                  {!selectedSpace ? (
-                    <div className="flex flex-col items-center justify-center h-full text-slate-400 space-y-4">
-                      <div className="bg-slate-100 p-6 rounded-full">
-                        <Layout size={48} className="text-slate-300" />
+            <div className="flex-1 flex overflow-hidden gap-6 lg:gap-8">
+              <div className="flex-1 glass-panel rounded-3xl overflow-hidden shadow-2xl border border-white/40 relative flex flex-col">
+                {activeMainTab === 'map' ? (
+                  <div className="flex-1 relative overflow-hidden flex flex-col">
+                    <div className="p-4 border-b border-slate-100 bg-white/50 backdrop-blur-md flex justify-between items-center z-10 shrink-0">
+                      <div className="flex items-center gap-2 text-xs font-bold text-slate-500 uppercase tracking-widest px-2">
+                         <Info size={14} className="text-blue-500" /> 圖面即時檢視
                       </div>
-                      <p className="text-lg font-medium">請從左側選單選擇一個空間進行討論</p>
                     </div>
-                  ) : (
-                    <div className="h-full flex flex-col p-6 lg:p-8 space-y-6">
-                      <div className="flex items-center justify-between pb-4 border-b border-slate-100 shrink-0">
-                        <div>
-                          <h3 className="text-3xl font-black text-slate-900 tracking-tight">{selectedSpace}</h3>
-                          <p className="text-sm text-slate-500 font-medium">空間細部設計與討論紀錄匯總</p>
+                    <div className="flex-1 relative overflow-auto p-4 flex items-center justify-center bg-brand-bg/30">
+                      <div className="relative w-full h-full opacity-90 transition-opacity">
+                        {activeMap.type === '3d' ? (
+                          <iframe 
+                            src={activeMap.viewerUrl}
+                            className="w-full h-full border-0 rounded-2xl shadow-inner bg-slate-100"
+                            title={`${activeMap.name} 3D Floor Plan`}
+                          />
+                        ) : (
+                          <img 
+                            src={activeMap.viewerUrl} 
+                            alt={activeMap.name}
+                            className="w-full h-auto object-contain transition-transform"
+                            referrerPolicy="no-referrer"
+                          />
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex-1 overflow-y-auto custom-scrollbar bg-white/50">
+                    {!selectedSpace ? (
+                      <div className="flex flex-col items-center justify-center h-full text-slate-400 space-y-4">
+                        <div className="bg-slate-100 p-6 rounded-full">
+                          <Layout size={48} className="text-slate-300" />
                         </div>
-                        <button 
-                          onClick={() => setSelectedSpace(null)} 
-                          className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-xl transition-colors"
-                        >
-                          <X size={20} />
-                        </button>
+                        <p className="text-lg font-medium">請從左側選單選擇一個空間進行討論</p>
                       </div>
+                    ) : (
+                      <div className="h-full flex flex-col p-6 lg:p-8 space-y-6">
+                        <div className="flex items-center justify-between pb-4 border-b border-slate-100 shrink-0">
+                          <div>
+                            <h4 className="text-xs font-black text-blue-600 uppercase tracking-widest mb-1">空間細部規範</h4>
+                            <h3 className="text-3xl font-black text-slate-900 tracking-tight">{selectedSpace}</h3>
+                          </div>
+                          <button 
+                            onClick={() => setSelectedSpace(null)} 
+                            className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-xl transition-colors lg:hidden"
+                          >
+                            <X size={20} />
+                          </button>
+                        </div>
 
-                      <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[1fr,400px] gap-6 lg:gap-8 overflow-hidden">
-                        {/* Requirements - Scrollable */}
-                        <div className="flex flex-col h-full min-h-[300px]">
-                          <div className="bg-blue-600/5 border border-blue-500/10 rounded-2xl p-6 h-full overflow-y-auto custom-scrollbar">
+                        <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-2">
+                          <div className="bg-blue-600/5 border border-blue-500/10 rounded-2xl p-6">
                             <div className="flex justify-between items-center mb-6 sticky top-0 bg-transparent backdrop-blur-sm pb-2">
-                              <h4 className="text-sm font-black text-blue-600 uppercase tracking-widest flex items-center gap-2">
-                                <ShieldAlert size={16} /> 細部設計規範
+                              <h4 className="text-base font-black text-blue-600 uppercase tracking-widest flex items-center gap-2">
+                                <ShieldAlert size={18} /> 設計規範明細
                               </h4>
                             </div>
-                            <div className="space-y-6">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                               {(() => {
-                                const CATEGORIES = ['醫療氣體設備', '燈光控制', '空調設備', '衛浴設備', '櫥櫃/家具', '天花板', '地面工程', '牆壁/油漆', '電力/資訊', '消防設備', '門窗工程', '護士呼叫系統'];
                                 const filtered = requirements.filter(k => 
                                   (k.space === selectedSpace) ||
                                   (!k.space && (k.title === selectedSpace || k.title.includes(selectedSpace || '')))
                                 );
 
-                                if (filtered.length === 0) return <p className="text-slate-500 text-sm italic">無特定規範，請討論一般設計細節</p>;
+                                if (filtered.length === 0) return <p className="text-slate-500 text-sm italic col-span-full text-center py-12">無特定規範，請點擊右側輸入討論細節</p>;
 
-                                return filtered.map((cat) => (
-                                  <div key={cat.id} className="space-y-3 p-4 bg-white/40 rounded-xl border border-blue-500/5 group">
+                                return filtered.filter(k => k.points.length > 0).map((cat) => (
+                                  <div key={cat.id} className="space-y-4 p-5 bg-white/60 rounded-2xl border border-blue-500/10 group shadow-sm hover:shadow-md transition-all">
                                     <div className="flex justify-between items-center">
-                                      <h5 className="text-sm font-black text-blue-600 border-l-4 border-blue-500 pl-3 py-1 uppercase tracking-tight">
+                                      <h5 className="text-lg font-black text-blue-700 border-l-4 border-blue-500 pl-4 py-1 uppercase tracking-tight">
                                         {cat.title}
                                       </h5>
-                                      <button 
-                                        onClick={() => setEditingReq({ id: cat.id, title: cat.title, points: cat.points })}
-                                        className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 hover:bg-blue-100 text-blue-600 rounded-lg"
-                                      >
-                                        <Edit size={14} />
-                                      </button>
+                                      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <button 
+                                          onClick={() => setEditingReq({ id: cat.id, title: cat.title, points: cat.points })}
+                                          className="p-2 hover:bg-blue-100 text-blue-600 rounded-xl"
+                                        >
+                                          <Edit size={16} />
+                                        </button>
+                                        <button 
+                                          onClick={async () => {
+                                            if (window.confirm(`確定要刪除「${cat.title}」分類嗎？`)) {
+                                              await deleteDoc(doc(db, 'requirements', cat.id));
+                                            }
+                                          }}
+                                          className="p-2 hover:bg-red-100 text-red-600 rounded-xl"
+                                        >
+                                          <Trash2 size={16} />
+                                        </button>
+                                      </div>
                                     </div>
-                                    <ul className="space-y-2.5 pl-1">
+                                    <ul className="space-y-3 pl-1">
                                       {cat.points.map((p, i) => (
-                                        <li key={i} className="flex gap-2.5 text-sm text-slate-700 leading-relaxed group/item">
-                                          <div className="w-1.2 h-1.2 rounded-full bg-blue-300 shrink-0 mt-2 transition-transform group-hover/item:scale-125" />
-                                          <p className="flex-1">{p}</p>
+                                        <li key={i} className="flex gap-3 text-base text-slate-700 leading-relaxed group/item">
+                                          <div className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0 mt-2.5 transition-transform group-hover/item:scale-150" />
+                                          <p className="flex-1 font-medium">{p}</p>
                                         </li>
                                       ))}
                                     </ul>
@@ -1264,56 +1274,62 @@ export default function App() {
                             </div>
                           </div>
                         </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
 
-                        {/* Note area - Right side (Floating Column) */}
-                        <div className="flex flex-col h-full space-y-6 overflow-hidden">
-                          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 space-y-4 shadow-sm shrink-0">
-                            <div className="flex justify-between items-center">
-                              <label className="text-xs font-black text-blue-600 uppercase tracking-widest flex items-center gap-2">
-                                <MessageSquare size={14} /> 意見與回饋
-                              </label>
-                              <button 
-                                onClick={startVoiceToText}
-                                className={`text-[10px] font-bold flex items-center gap-2 px-3 py-1.5 rounded-full transition-all ${isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-white text-blue-500 hover:bg-blue-50 border border-blue-100 shadow-sm'}`}
-                              >
-                                <Sparkles size={12} /> {isListening ? '收音中...' : '語音輸入'}
-                              </button>
-                            </div>
-                            <textarea 
-                              value={newNote}
-                              onChange={(e) => setNewNote(e.target.value)}
-                              placeholder="在此輸入討論細節、變更要求（建議白話即可，AI 會自動修飾）..."
-                              className="w-full h-24 p-4 bg-white border border-slate-200 rounded-xl text-base text-slate-900 focus:border-blue-500 shadow-inner outline-none resize-none transition-all placeholder:text-slate-400"
-                            />
-                            <button 
-                              onClick={handleAddNote}
-                              disabled={!newNote.trim()}
-                              className="w-full py-3 bg-blue-600 text-white rounded-xl font-black shadow-lg shadow-blue-500/10 hover:bg-blue-700 disabled:opacity-50 transition-all active:scale-[0.98] text-xs tracking-widest uppercase"
-                            >
-                              送出討論內容
-                            </button>
-                          </div>
+              {/* Persistent Right Sidebar for Discussion - Visible when space is selected */}
+              {selectedSpace && (
+                <div className="hidden lg:flex flex-col w-[380px] h-full space-y-6 overflow-hidden shrink-0">
+                  {/* Note Input */}
+                  <div className="bg-white border border-slate-200 rounded-3xl p-6 space-y-5 shadow-xl shadow-slate-200/20 flex flex-col shrink-0">
+                    <div className="flex justify-between items-center">
+                      <label className="text-sm font-black text-blue-600 uppercase tracking-widest flex items-center gap-2">
+                        <MessageSquare size={16} /> 意見與回饋
+                      </label>
+                      <button 
+                        onClick={startVoiceToText}
+                        className={`text-[11px] font-bold flex items-center gap-2 px-4 py-2 rounded-full transition-all ${isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-blue-50 text-blue-600 hover:bg-blue-100 border border-blue-100'}`}
+                      >
+                        <Sparkles size={14} /> {isListening ? '聽取中...' : '語音輸入'}
+                      </button>
+                    </div>
+                    <textarea 
+                      value={newNote}
+                      onChange={(e) => setNewNote(e.target.value)}
+                      placeholder="請輸入討論建議（支持白話，AI 會代為修飾）..."
+                      className="w-full h-32 p-4 bg-slate-50 border border-slate-200 rounded-2xl text-base text-slate-900 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/5 shadow-inner outline-none resize-none transition-all placeholder:text-slate-400"
+                    />
+                    <button 
+                      onClick={handleAddNote}
+                      disabled={!newNote.trim()}
+                      className="w-full py-4 bg-blue-600 text-white rounded-2xl font-black shadow-lg shadow-blue-500/20 hover:bg-blue-700 hover:shadow-blue-500/30 disabled:opacity-50 transition-all active:scale-[0.98] text-sm tracking-widest uppercase"
+                    >
+                      送出討論內容
+                    </button>
+                  </div>
 
-                          <div className="flex-1 min-h-0 flex flex-col space-y-3 overflow-hidden">
-                            <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 px-2 shrink-0">
-                              <RotateCcw size={14} /> 歷史討論紀錄
-                            </h4>
-                            <div className="flex-1 overflow-y-auto custom-scrollbar relative px-2">
-                              <div className="absolute left-6 top-0 bottom-0 w-px bg-slate-100 z-0" />
-                              <div className="relative z-10">
-                                <NotesArchived 
-                                  notes={notes.filter(n => n.space === selectedSpace && n.floor === activeFloor)}
-                                  onToggleStatus={handleToggleNoteStatus}
-                                  onDelete={handleDeleteNote}
-                                  onEdit={(note) => setEditingNote(note)}
-                                />
-                              </div>
-                            </div>
-                          </div>
-                        </div>
+                  {/* History Timeline */}
+                  <div className="flex-1 min-h-0 flex flex-col bg-white border border-slate-200 rounded-3xl p-6 shadow-xl shadow-slate-200/20 overflow-hidden">
+                    <div className="flex items-center justify-between mb-4 shrink-0">
+                      <h4 className="text-sm font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 px-1">
+                        <RotateCcw size={16} /> 歷史討論紀錄
+                      </h4>
+                    </div>
+                    <div className="flex-1 overflow-y-auto custom-scrollbar relative px-1">
+                      <div className="absolute left-6 top-0 bottom-0 w-px bg-slate-100 z-0" />
+                      <div className="relative z-10">
+                        <NotesArchived 
+                          notes={notes.filter(n => n.space === selectedSpace && n.floor === activeFloor)}
+                          onToggleStatus={handleToggleNoteStatus}
+                          onDelete={handleDeleteNote}
+                          onEdit={(note) => setEditingNote(note)}
+                        />
                       </div>
                     </div>
-                  )}
+                  </div>
                 </div>
               )}
             </div>
