@@ -3,27 +3,29 @@
 
 @theme {
   --font-sans: "Inter", "Noto Sans TC", ui-sans-serif, system-ui, sans-serif;
-  --color-brand-bg: #0F1115;
-  --color-brand-teal: #2DD4BF;
-  --color-brand-slate: #1E293B;
+  --color-brand-bg: #F2F2F7;
+  --color-brand-blue: #007AFF;
+  --color-brand-slate: #F8FAFC;
 }
 
 @layer components {
   .glass-panel {
-    background: rgba(30, 41, 59, 0.7);
-    backdrop-filter: blur(12px);
-    border: 1px solid rgba(255, 255, 255, 0.05);
+    background: rgba(255, 255, 255, 0.7);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(0, 0, 0, 0.05);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
   }
 
   .status-pill {
-    background: rgba(45, 212, 191, 0.1);
-    border: 1px solid rgba(45, 212, 191, 0.3);
-    color: #2DD4BF;
+    background: rgba(0, 122, 255, 0.1);
+    border: 1px solid rgba(0, 122, 255, 0.3);
+    color: #007AFF;
   }
 }
 
 body {
-  background-color: #0F1115;
-  color: #E2E8F0;
+  background-color: #F2F2F7;
+  color: #1C1C1E;
   font-family: var(--font-sans);
 }
+

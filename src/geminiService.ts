@@ -10,19 +10,21 @@ export function setCustomApiKey(key: string) {
     ai = null;
     return;
   }
-  customApiKey = key;
+  customApiKey = key.trim();
   try {
-    ai = new GoogleGenAI({ apiKey: key });
+    ai = new GoogleGenAI({ apiKey: customApiKey });
+    console.log("Custom API Key set and AI client initialized.");
   } catch (e) {
     console.error("Invalid API Key format:", e);
     ai = null;
   }
 }
 
-function getAiClient() {
+export function getAiClient() {
   if (customApiKey) {
     if (!ai) {
       try {
+        console.log("Initializing Gemini AI with custom key...");
         ai = new GoogleGenAI({ apiKey: customApiKey });
       } catch (e) {
         console.error("Failed to initialize Gemini AI with custom key:", e);
@@ -33,20 +35,25 @@ function getAiClient() {
   }
   
   if (!ai) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      console.warn("GEMINI_API_KEY is not defined.");
-      return null;
-    }
+    // Try process.env (mapped by Vite)
     try {
-      ai = new GoogleGenAI({ apiKey: apiKey });
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (apiKey && apiKey !== "undefined" && apiKey !== "") {
+        console.log("Initializing Gemini AI with system key...");
+        ai = new GoogleGenAI({ apiKey: apiKey });
+      } else {
+        console.warn("GEMINI_API_KEY is not available in environment.");
+        return null;
+      }
     } catch (e) {
-      console.error("Failed to initialize Gemini AI with environment key:", e);
+      console.warn("Accessing process.env.GEMINI_API_KEY failed or it is not defined.", e);
       return null;
     }
   }
   return ai;
 }
+
+const DEFAULT_MODEL = "gemini-2.5-flash";
 
 const SYSTEM_PROMPT = `
 你是一位專業的醫療空間設計顧問，正在協助工程承辦人員與護理長討論「屏東榮總龍泉分院B棟3F、5F改建工程」。
@@ -75,7 +82,7 @@ export async function askAiAssistant(query: string) {
     }
     
     const response = await aiClient.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: DEFAULT_MODEL,
       contents: [{ role: 'user', parts: [{ text: query }] }],
       config: {
         systemInstruction: SYSTEM_PROMPT,
@@ -98,25 +105,25 @@ export async function analyzeNotesToRequirements(currentRequirements: any[], con
 現有規範：
 ${JSON.stringify(currentRequirements, null, 2)}
 
-最新的會議決議紀錄 (已確認)：
-${JSON.stringify(confirmedNotes, null, 2)}
+最新的會議討論紀錄：
+${JSON.stringify(confirmedNotes.map(n => n.content), null, 2)}
 
-請根據以上資料，產出更新後的完整規範 JSON。`;
+請根據以上會議討論紀錄，產出更新後的完整規範 JSON。`;
 
     const result = await aiClient.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: DEFAULT_MODEL,
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       config: {
         responseMimeType: "application/json",
         systemInstruction: `妳是一位專業的建築規範分析師與資深編輯。
-任務：分析會議討論紀錄（Notes），將其中的核心「設計要求」或「規格決議」提取出來，並整合進現有的「工程規範（Requirements）」中。
+任務：分析會議討論紀錄（Notes），將其中的核心「設計要求」或「規格決議」強制提取出來，並整合進現有的「工程規範（Requirements）」中。不論紀錄狀態為何，都必須視為確認的需求並整併。
 
 規則：
-1. **去重與彙整 (核心任務)**：務必檢查新提取的內容是否與現有規範重複。若內容相近或相同，請合併條目，不要產生冗餘的內容。
+1. **去重與彙整 (核心任務)**：務必檢查新提取的內容是否與現有規範重複。若內容相近或相同，請合併條目。如果遇到新的設備要求（如：門口大小），必須新增至 points 中。
 2. **邏輯歸類**：將新要求放入最貼切的類別中。若現有類別名稱不夠準確，可微調類別標題。
-3. **輸出格式**：必須是純 JSON 陣列。物件格式：{ title: string, points: string[] }。
-4. **語言風格**：專業、精煉的繁體中文工程規格。
-5. **資料清理**：輸出的 points 應該是最終的決議描述，而非討論過程。`
+3. **類別前綴**：對於每一個決議項目 (point)，務必以分類作為前綴，例如「【門】」、「【窗】」、「【保護機制】」等。範例："【門】: 門的大小要可以通過病床"。
+4. **輸出格式**：必須是純 JSON 陣列。物件格式：[{ title: string, points: string[] }]。
+5. **強制更新**：你必須將新的會議紀錄內容體現到 points 裡，不能忽略任何一筆合理的工程討論。`
       }
     });
 
@@ -152,7 +159,7 @@ ${type === 'requirements' ? '物件格式: [{ title: string, points: string[] }]
     `;
 
     const result = await aiClient.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: DEFAULT_MODEL,
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       config: {
         responseMimeType: "application/json",
@@ -188,7 +195,7 @@ export async function analyzeFileToSpecs(fileData: { data: string, mimeType: str
     `;
 
     const result = await aiClient.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: DEFAULT_MODEL,
       contents: [
         {
           role: 'user',
@@ -200,7 +207,7 @@ export async function analyzeFileToSpecs(fileData: { data: string, mimeType: str
       ],
       config: {
         responseMimeType: "application/json",
-        systemInstruction: `妳是一位專業的工程圖面與合約分析師。妳能精準辨識圖片中的手寫筆記、公文要點與圖面標註，並將其轉化為結構化的工程規範。格式務必嚴格遵守 JSON。`
+        systemInstruction: `妳是一位專業的工程圖面與合約分析師。妳能精準辨識圖片或 PDF 文件中的手寫筆記、公文要點與圖面標註，並將其轉化為結構化的工程規範。格式務必嚴格遵守 JSON。`
       }
     });
 

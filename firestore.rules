@@ -39,6 +39,7 @@ service cloud.firestore {
       allow read: if true;
       allow list: if true;
       allow create: if isValidId(topicId) && isValidTopic(incoming());
+      allow update: if isValidTopic(incoming()) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'createdAt']);
       allow delete: if true;
     }
 

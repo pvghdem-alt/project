@@ -89,6 +89,13 @@ interface ChecklistItem {
   order: number;
 }
 
+interface Topic {
+  id: string;
+  name: string;
+  isDefault?: boolean;
+  floorId?: string;
+}
+
 export default function App() {
   const [activeFloor, setActiveFloor] = useState<FloorKey>('B3F');
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -98,13 +105,27 @@ export default function App() {
   const [isListening, setIsListening] = useState(false);
   
   // Custom Topics
-  const [customTopics, setCustomTopics] = useState<string[]>(['護理站', '一般病房', '保護室', '公共活動區']);
+  const [customTopics, setCustomTopics] = useState<Topic[]>([
+    { id: 'def-1', name: '護理站', isDefault: true },
+    { id: 'def-2', name: '一般病房', isDefault: true },
+    { id: 'def-3', name: '保護室', isDefault: true },
+    { id: 'def-4', name: '公共活動區', isDefault: true }
+  ]);
   const [showAddTopic, setShowAddTopic] = useState(false);
   const [newTopicName, setNewTopicName] = useState('');
 
   // API Key state
   const [apiKey, setApiKey] = useState('');
   const [isApiKeySet, setIsApiKeySet] = useState(false);
+
+  useEffect(() => {
+    const savedKey = localStorage.getItem('gemini_api_key');
+    if (savedKey) {
+      setApiKey(savedKey);
+      setCustomApiKey(savedKey);
+      setIsApiKeySet(true);
+    }
+  }, []);
   const [showApiModal, setShowApiModal] = useState(false);
 
   // Chat state
@@ -112,10 +133,11 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [notification, setNotification] = useState<{ message: string, type: 'success' | 'ai' } | null>(null);
+  const [notification, setNotification] = useState<{ message: string, type: 'success' | 'ai' | 'error' } | null>(null);
 
   // Dynamic Maps & Requirements
   const [projectMaps, setProjectMaps] = useState<ProjectMap[]>([]);
+  const [newMapData, setNewMapData] = useState<{name: string, url: string, type: 'image'|'3d'}>({ name: '', url: '', type: 'image' });
   const [requirements, setRequirements] = useState<RequirementCategory[]>([]);
   const [checklist, setChecklist] = useState<ChecklistItem[]>([]);
   const [showAddMapModal, setShowAddMapModal] = useState(false);
@@ -124,6 +146,8 @@ export default function App() {
   const [showAddCheckModal, setShowAddCheckModal] = useState(false);
   const [newCheckText, setNewCheckText] = useState('');
   const [isCleaning, setIsCleaning] = useState(false);
+  const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
+  const [topicEditName, setTopicEditName] = useState('');
   const [rightSidebarWidth, setRightSidebarWidth] = useState(400);
   const [expandedReqIds, setExpandedReqIds] = useState<string[]>([]);
   const [collapsedChatIndices, setCollapsedChatIndices] = useState<number[]>([]);
@@ -163,8 +187,18 @@ export default function App() {
     const q = collection(db, 'requirements');
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as RequirementCategory[];
-      if (data.length > 0) setRequirements(data);
-      else setRequirements(DESIGN_SPECS.keyPoints.map((k, i) => ({ id: `default-${i}`, ...k })));
+      const defaults = DESIGN_SPECS.keyPoints.map((k, i) => ({ id: `default-${i}`, ...k }));
+      if (data.length > 0) {
+        const merged = [...data];
+        defaults.forEach(def => {
+          if (!data.some(d => d.title === def.title || (def.title.includes('保護室') && d.title.includes('保護室')) || (def.title.includes('護理') && d.title.includes('護理')) || (def.title.includes('病房') && d.title.includes('病房')))) {
+             merged.push(def);
+          }
+        });
+        setRequirements(merged);
+      } else {
+        setRequirements(defaults);
+      }
     });
     return () => unsubscribe();
   }, []);
@@ -190,8 +224,17 @@ export default function App() {
   useEffect(() => {
     const q = query(collection(db, 'topics'), orderBy('createdAt', 'asc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(doc => doc.data().name);
-      const defaultTopics = ['護理站', '一般病房', '保護室', '公共活動區'];
+      const data = snapshot.docs.map(doc => ({
+        id: doc.id,
+        name: doc.data().name,
+        isDefault: false
+      })) as Topic[];
+      const defaultTopics: Topic[] = [
+        { id: 'def-1', name: '護理站', isDefault: true },
+        { id: 'def-2', name: '一般病房', isDefault: true },
+        { id: 'def-3', name: '保護室', isDefault: true },
+        { id: 'def-4', name: '公共活動區', isDefault: true }
+      ];
       setCustomTopics([...defaultTopics, ...data]);
     });
     return () => unsubscribe();
@@ -205,16 +248,62 @@ export default function App() {
       content: newNote,
       timestamp: new Date().toLocaleString(),
       createdAt: serverTimestamp(),
-      status: 'pending',
+      status: 'confirmed',
       authorId: 'public'
     };
     try {
       await addDoc(collection(db, 'notes'), noteData);
       setNewNote('');
-      setNotification({ message: '會議紀錄已儲存成功！', type: 'success' });
+      setNotification({ message: '紀錄已儲存！', type: 'success' });
       setTimeout(() => setNotification(null), 2000);
     } catch (err) {
       console.error("Error adding note:", err);
+      setNotification({ message: '儲存發生錯誤', type: 'error' });
+      setTimeout(() => setNotification(null), 2000);
+    }
+  };
+
+  const handleCompleteMeeting = async () => {
+    if (!selectedSpace) return;
+    setIsCleaning(true);
+    setNotification({ message: 'AI 正在整合會議紀錄至工程規範...', type: 'ai' });
+    try {
+      const thisSpaceReqs = requirements.filter(r => r.title === selectedSpace || r.title.includes(selectedSpace));
+      const sourceNotes = notes.filter(n => n.space === selectedSpace && n.floor === activeFloor);
+
+      if (sourceNotes.length === 0) {
+         setNotification({ message: '無會議紀錄可整合', type: 'error' });
+         setIsCleaning(false);
+         setTimeout(() => setNotification(null), 2000);
+         return;
+      }
+
+      const updatedReqs = await analyzeNotesToRequirements(
+        thisSpaceReqs.length ? thisSpaceReqs : [{ id: 'new', title: selectedSpace, points: [] }], 
+        sourceNotes
+      );
+      
+      if (updatedReqs && updatedReqs.length > 0) {
+          const req = updatedReqs[0];
+          const existing = requirements.find(r => r.title === req.title || r.title.includes(selectedSpace));
+          if (existing && !existing.id.startsWith('default-')) {
+            await updateDoc(doc(db, 'requirements', existing.id), {
+              points: req.points,
+              updatedAt: serverTimestamp()
+            });
+          } else {
+            await addDoc(collection(db, 'requirements'), { ...req, title: existing ? existing.title : selectedSpace, updatedAt: serverTimestamp() });
+          }
+          setNotification({ message: '工程規範已自動彙整！', type: 'success' });
+      } else {
+          setNotification({ message: '無更新的規範', type: 'success' });
+      }
+    } catch (e) {
+      console.error(e);
+      setNotification({ message: '彙整失敗', type: 'error' });
+    } finally {
+      setIsCleaning(false);
+      setTimeout(() => setNotification(null), 2000);
     }
   };
 
@@ -356,57 +445,89 @@ export default function App() {
     const file = event.target.files?.[0];
     if (!file) return;
 
+    // Check if API Key is set (either custom or system)
+    // We can check if isApiKeySet is true, but that only tracks custom key.
+    // However, analyzeFileToSpecs will try to initialize and throw if it fails.
+    
     setIsAiLoading(true);
-    setNotification({ message: '正在分析文件內容並整合規範...', type: 'ai' });
+    setNotification({ message: '正在讀取文件，請稍候...', type: 'ai' });
 
     try {
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        const base64Data = e.target?.result as string;
-        const data = base64Data.split(',')[1];
-        const mimeType = file.type;
-
-        const analysis = await analyzeFileToSpecs({ data, mimeType });
-
-        if (analysis) {
-          const batch = writeBatch(db);
-          
-          if (analysis.requirements && Array.isArray(analysis.requirements)) {
-            analysis.requirements.forEach((req: any) => {
-              const ref = doc(collection(db, 'requirements'));
-              batch.set(ref, { ...req, updatedAt: serverTimestamp() });
-            });
-          }
-
-          if (analysis.checklist && Array.isArray(analysis.checklist)) {
-            analysis.checklist.forEach((check: any, i: number) => {
-              const ref = doc(collection(db, 'checklist'));
-              batch.set(ref, { 
-                text: check.text, 
-                checked: false, 
-                order: checklist.length + i, 
-                createdAt: serverTimestamp() 
-              });
-            });
-          }
-
-          await batch.commit();
-          setNotification({ message: '文件分析完成，規範已更新！', type: 'success' });
-          
-          setChatMessages(prev => [...prev, {
-            role: 'assistant',
-            content: `### 文件分析報告\n\n我已完成「${file.name}」的內容分析，並將相關條目整合進系統：\n\n- 新增了 ${analysis.requirements?.length || 0} 個規範類別\n- 新增了 ${analysis.checklist?.length || 0} 個查檢項目\n\n請前往對應頁面查看詳細內容。`
-          }]);
-        }
+      const readFileAsBase64 = (file: File): Promise<{data: string, mimeType: string}> => {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const base64Data = reader.result as string;
+            const data = base64Data.split(',')[1];
+            resolve({ data, mimeType: file.type });
+          };
+          reader.onerror = () => reject(new Error("文件讀取失敗"));
+          reader.readAsDataURL(file);
+        });
       };
-      reader.readAsDataURL(file);
-    } catch (err) {
+
+      const fileData = await readFileAsBase64(file);
+      setNotification({ message: `正在分析 ${file.name}...`, type: 'ai' });
+      
+      const analysis = await analyzeFileToSpecs(fileData);
+
+      if (analysis) {
+        const batch = writeBatch(db);
+        let reqCount = 0;
+        let checkCount = 0;
+        
+        if (analysis.requirements && Array.isArray(analysis.requirements)) {
+          analysis.requirements.forEach((req: any) => {
+            const ref = doc(collection(db, 'requirements'));
+            batch.set(ref, { 
+              ...req, 
+              updatedAt: serverTimestamp(),
+              source: `Imported from ${file.name}`
+            });
+            reqCount++;
+          });
+        }
+
+        if (analysis.checklist && Array.isArray(analysis.checklist)) {
+          analysis.checklist.forEach((check: any, i: number) => {
+            const ref = doc(collection(db, 'checklist'));
+            batch.set(ref, { 
+              text: check.text, 
+              checked: false, 
+              order: checklist.length + i, 
+              createdAt: serverTimestamp(),
+              source: `Imported from ${file.name}`
+            });
+            checkCount++;
+          });
+        }
+
+        await batch.commit();
+        setNotification({ message: '文件分析完成，規範已更新！', type: 'success' });
+        
+        setChatMessages(prev => [...prev, {
+          role: 'assistant',
+          content: `### 📄 文件分析成功\n\n我已完成對 **${file.name}** 的深入分析。以下是匯入摘要：\n\n- **工程規範**：新增了 ${reqCount} 條條文\n- **查檢表**：新增了 ${checkCount} 個項目\n\n您可以點擊右側欄位的標籤頁查看細節。若有不準確之處，建議手動微調。`
+        }]);
+      } else {
+        setNotification({ 
+          message: '分析失敗。請確認：1. API Key 正確 2. 檔案內容清晰 3. 檔案類型支援 (PDF/圖片)', 
+          type: 'error' 
+        });
+      }
+    } catch (err: any) {
       console.error("File analysis failed:", err);
-      setNotification({ message: '分析失敗，請重試。', type: 'success' });
+      const errorMsg = err.message || '分析過程發生未知錯誤';
+      setNotification({ message: `錯誤: ${errorMsg}`, type: 'error' });
+      
+      // If error is related to API key, show modal
+      if (errorMsg.includes("initialized") || errorMsg.includes("API Key")) {
+        setShowApiModal(true);
+      }
     } finally {
       setIsAiLoading(false);
-      setTimeout(() => setNotification(null), 3000);
       if (fileInputRef.current) fileInputRef.current.value = '';
+      // Keep errors visible for longer
     }
   };
 
@@ -518,12 +639,13 @@ export default function App() {
   };
 
   const handleAddTopic = async () => {
-    if (newTopicName.trim() && !customTopics.includes(newTopicName.trim())) {
+    if (newTopicName.trim() && !customTopics.some(t => t.name === newTopicName.trim())) {
       try {
         await addDoc(collection(db, 'topics'), {
           name: newTopicName.trim(),
           createdAt: serverTimestamp(),
-          creatorId: 'public'
+          creatorId: 'public',
+          floorId: activeFloor
         });
         setNewTopicName('');
         setShowAddTopic(false);
@@ -533,9 +655,57 @@ export default function App() {
     }
   };
 
+  const handleUpdateTopicName = async (topicId: string) => {
+    if (!topicEditName.trim()) {
+      setEditingTopicId(null);
+      return;
+    }
+    try {
+      await updateDoc(doc(db, 'topics', topicId), {
+        name: topicEditName.trim()
+      });
+      setEditingTopicId(null);
+      setTopicEditName('');
+      setNotification({ message: '空間名稱已更新', type: 'success' });
+      setTimeout(() => setNotification(null), 3000);
+    } catch (err) {
+      console.error("Error updating topic name:", err);
+    }
+  };
+
+  const handleDeleteTopic = async (topic: Topic) => {
+    if (topic.isDefault) {
+      setNotification({ message: '系統預設空間無法刪除', type: 'error' });
+      setTimeout(() => setNotification(null), 3000);
+      return;
+    }
+    
+    if (!confirm(`確定要刪除「${topic.name}」及其相關討論紀錄嗎？`)) return;
+
+    try {
+      // Delete the topic record
+      await deleteDoc(doc(db, 'topics', topic.id));
+      
+      // Also delete notes associated with this topic (optional but cleaner)
+      const topicNotes = notes.filter(n => n.space === topic.name);
+      const batch = writeBatch(db);
+      topicNotes.forEach(n => {
+        batch.delete(doc(db, 'notes', n.id));
+      });
+      await batch.commit();
+
+      if (selectedSpace === topic.name) setSelectedSpace(null);
+      setNotification({ message: `空間「${topic.name}」已刪除`, type: 'success' });
+      setTimeout(() => setNotification(null), 3000);
+    } catch (err) {
+      console.error("Error deleting topic:", err);
+    }
+  };
+
   const handleSetApiKey = () => {
     if (apiKey.trim()) {
       setCustomApiKey(apiKey.trim());
+      localStorage.setItem('gemini_api_key', apiKey.trim());
       setIsApiKeySet(true);
       setShowApiModal(false);
     }
@@ -588,7 +758,7 @@ export default function App() {
   const toggleSidebar = () => setSidebarOpen(!sidebarOpen);
 
   return (
-    <div className="flex h-screen bg-brand-bg font-sans text-slate-200 overflow-hidden">
+    <div className="flex h-screen bg-brand-bg font-sans text-slate-900 overflow-hidden">
       {/* Sidebar Navigation */}
       <motion.aside 
         initial={false}
@@ -597,77 +767,109 @@ export default function App() {
       >
         <div className="p-6 flex items-center justify-between">
           <div className={`flex items-center gap-3 ${!sidebarOpen && 'hidden'}`}>
-            <div className="bg-teal-500 p-2 rounded-lg text-black">
+            <div className="bg-blue-500 p-2 rounded-lg text-white">
               <Building2 size={24} />
             </div>
-            <h1 className="font-light text-xl tracking-tight text-slate-100 uppercase">龍泉院區</h1>
+            <h1 className="font-light text-2xl tracking-tight text-slate-900 uppercase">龍泉院區</h1>
           </div>
-          <button onClick={toggleSidebar} className="p-2 hover:bg-white/5 rounded-lg text-slate-500">
+          <button onClick={toggleSidebar} className="p-2 hover:bg-black/5 rounded-lg text-slate-500">
             {sidebarOpen ? <Menu size={20} /> : <ChevronRight size={20} />}
           </button>
         </div>
 
-        <nav className="flex-1 px-4 space-y-2 mt-4 overflow-y-auto">
-          {projectMaps.map(map => (
-            <NavItem 
-              key={map.id}
-              icon={<MapIcon size={20} />} 
-              label={map.name} 
-              active={activeFloor === map.id} 
-              onClick={() => setActiveFloor(map.id)}
-              collapsed={!sidebarOpen}
-            />
-          ))}
-          
-          <button 
-            onClick={() => setShowAddMapModal(true)}
-            className={`w-full flex items-center gap-3 p-3 rounded-xl text-slate-500 hover:bg-white/5 hover:text-teal-400 transition-all border border-dashed border-slate-700 ${!sidebarOpen && 'justify-center'}`}
-          >
-            <Plus size={18} />
-            {sidebarOpen && <span className="text-xs font-bold uppercase tracking-widest">新增配置圖</span>}
-          </button>
+        <nav className="flex-1 px-4 space-y-2 mt-4 overflow-y-auto custom-scrollbar">
+          <div className="mb-2">
+             <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-4 mb-2">空間總覽</h3>
+             {projectMaps.map(map => (
+               <NavItem 
+                 key={map.id}
+                 icon={<MapIcon size={20} />} 
+                 label={map.name} 
+                 active={activeFloor === map.id} 
+                 onClick={() => setActiveFloor(map.id)}
+                 collapsed={!sidebarOpen}
+               />
+             ))}
+             
+             <button 
+               onClick={() => setShowAddMapModal(true)}
+               className={`w-full flex items-center gap-3 p-3 rounded-xl text-slate-500 hover:bg-black/5 hover:text-blue-600 transition-all border border-dashed border-slate-300 mt-2 ${!sidebarOpen && 'justify-center'}`}
+             >
+               <Plus size={18} />
+               {sidebarOpen && <span className="text-sm font-bold uppercase tracking-widest">新增配置圖</span>}
+             </button>
+          </div>
 
-          <div className="h-px bg-slate-800 my-4" />
-          <NavItem 
-            icon={<ClipboardList size={20} />} 
-            label="討論查檢表" 
-            active={selectedSpace === 'checklist'} 
-            onClick={() => setSelectedSpace('checklist')}
-            collapsed={!sidebarOpen}
-          />
-          <NavItem 
-            icon={<ShieldAlert size={20} />} 
-            label="工程技術規範" 
-            active={selectedSpace === 'specs'} 
-            onClick={() => setSelectedSpace('specs')}
-            collapsed={!sidebarOpen}
-          />
-          <NavItem 
-            icon={<MessageSquare size={20} />} 
-            label="會議紀錄彙整" 
-            active={selectedSpace === 'notes'} 
-            onClick={() => setSelectedSpace('notes')}
-            collapsed={!sidebarOpen}
-          />
+          <div className="h-px bg-slate-100 my-4" />
+          
+          <div className="mb-2">
+             <div className="flex items-center justify-between px-4 mb-2">
+                <h3 className={`text-[10px] font-bold text-slate-400 uppercase tracking-widest ${!sidebarOpen && 'hidden'}`}>空間細部討論</h3>
+                {sidebarOpen && (
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); setShowAddTopic(!showAddTopic); }}
+                    className="p-1 hover:bg-black/5 rounded text-blue-500 transition-colors"
+                  >
+                    <Plus size={14} />
+                  </button>
+                )}
+             </div>
+
+             {sidebarOpen && showAddTopic && (
+               <div className="mb-4 flex gap-2 px-2">
+                 <input 
+                   type="text"
+                   value={newTopicName}
+                   onChange={(e) => setNewTopicName(e.target.value)}
+                   placeholder="輸入新空間名稱..."
+                   className="flex-1 bg-[#F2F2F7] border border-slate-300 rounded px-2 py-1.5 text-xs outline-none focus:border-blue-500/50"
+                 />
+                 <button 
+                   onClick={handleAddTopic}
+                   className="bg-blue-500 text-white px-2 py-1.5 rounded text-xs font-bold"
+                 >
+                   新增
+                 </button>
+               </div>
+             )}
+
+             {customTopics.filter(t => t.isDefault || t.floorId === activeFloor).map((topic) => (
+               <NavItem 
+                 key={topic.id}
+                 icon={<Layout size={20} />} 
+                 label={topic.name} 
+                 active={selectedSpace === topic.name} 
+                 onClick={() => setSelectedSpace(topic.name)}
+                 collapsed={!sidebarOpen}
+                 onDoubleClick={() => !topic.isDefault && (setEditingTopicId(topic.id), setTopicEditName(topic.name))}
+                 isEditing={editingTopicId === topic.id}
+                 editValue={topicEditName}
+                 onEditChange={setTopicEditName}
+                 onEditSubmit={() => handleUpdateTopicName(topic.id)}
+                 onEditCancel={() => setEditingTopicId(null)}
+                 onDelete={!topic.isDefault ? () => handleDeleteTopic(topic) : undefined}
+               />
+             ))}
+          </div>
         </nav>
 
-        <div className="p-4 border-t border-slate-800 space-y-4">
+        <div className="p-4 border-t border-slate-200 space-y-4">
           <button 
             onClick={() => setShowApiModal(true)}
-            className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all ${isApiKeySet ? 'bg-teal-500/10 text-teal-400 border border-teal-500/30' : 'bg-white/5 text-slate-400 border border-transparent hover:bg-white/10'} ${!sidebarOpen && 'justify-center'}`}
+            className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all ${isApiKeySet ? 'bg-blue-500/10 text-blue-600 border border-blue-500/30' : 'bg-black/5 text-slate-500 border border-transparent hover:bg-black/10'} ${!sidebarOpen && 'justify-center'}`}
           >
             <Key size={18} />
-            {sidebarOpen && <span className="text-xs font-bold uppercase tracking-widest">{isApiKeySet ? 'API Key 已設定' : '設定 API Key'}</span>}
+            {sidebarOpen && <span className="text-sm font-bold uppercase tracking-widest">{isApiKeySet ? 'API Key 已設定' : '設定 API Key'}</span>}
           </button>
           
-          <div className={`flex items-center gap-3 p-3 rounded-xl bg-white/5 ${!sidebarOpen && 'justify-center'}`}>
-            <div className="w-8 h-8 rounded-full bg-teal-500/20 flex items-center justify-center text-teal-400 font-bold overflow-hidden">
+          <div className={`flex items-center gap-3 p-3 rounded-xl bg-black/5 ${!sidebarOpen && 'justify-center'}`}>
+            <div className="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center text-blue-600 font-bold overflow-hidden">
                <UserIcon size={16} />
             </div>
             {sidebarOpen && (
               <div className="overflow-hidden">
-                <p className="text-sm font-medium truncate text-slate-200">工程協作模式</p>
-                <p className="text-[10px] text-teal-500/60 font-mono tracking-tighter uppercase">Cloud Synced (Public)</p>
+                <p className="text-base font-medium truncate text-slate-900">工程協作模式</p>
+                <p className="text-xs text-blue-500/60 font-mono tracking-tighter uppercase">Cloud Synced (Public)</p>
               </div>
             )}
           </div>
@@ -677,24 +879,24 @@ export default function App() {
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col h-full overflow-hidden relative">
         {/* Header Bar */}
-        <header className="h-16 border-b border-slate-800 bg-brand-bg/50 backdrop-blur-sm px-8 flex items-center justify-between shrink-0 z-20">
+        <header className="h-16 border-b border-slate-200 bg-brand-bg/50 backdrop-blur-sm px-8 flex items-center justify-between shrink-0 z-20">
           <div className="flex items-center gap-4">
-            <h2 className="font-light text-lg tracking-tight text-slate-100">{activeMap.name} 細部設計討論</h2>
+            <h2 className="font-light text-xl tracking-tight text-slate-900">{activeMap.name} 細部設計討論</h2>
             <div className="flex gap-2">
-              <span className="status-pill px-2.5 py-1 text-[10px] font-bold rounded uppercase tracking-tighter">
+              <span className="status-pill px-2.5 py-1 text-xs font-bold rounded uppercase tracking-tighter">
                 {activeMap.type === '3d' ? '3D Viewer' : '2D Image'}
               </span>
             </div>
           </div>
           <div className="flex items-center gap-3">
-             <button className="flex items-center gap-2 text-xs text-slate-400 bg-white/5 border border-slate-700 px-3 py-1.5 rounded hover:bg-white/10 transition-colors uppercase tracking-widest">
+             <button className="flex items-center gap-2 text-sm text-slate-500 bg-black/5 border border-slate-300 px-3 py-1.5 rounded hover:bg-black/10 transition-colors uppercase tracking-widest">
                 <ExternalLink size={14} />
                 圖面比對
              </button>
              <button 
               onClick={handleAiSyncRequirements}
               disabled={isAnalyzing}
-              className="flex items-center gap-2 text-xs text-black bg-teal-500 px-4 py-1.5 rounded hover:bg-teal-400 shadow-lg shadow-teal-500/20 active:scale-95 transition-all font-bold uppercase tracking-widest disabled:opacity-50"
+              className="flex items-center gap-2 text-sm text-white bg-blue-500 px-4 py-1.5 rounded hover:bg-blue-600 shadow-lg shadow-blue-500/20 active:scale-95 transition-all font-bold uppercase tracking-widest disabled:opacity-50"
              >
                 {isAnalyzing ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
                 {isAnalyzing ? 'AI 分析中...' : '完成會議紀錄'}
@@ -712,24 +914,27 @@ export default function App() {
                   initial={{ opacity: 0, y: -20, x: '-50%' }}
                   animate={{ opacity: 1, y: 0, x: '-50%' }}
                   exit={{ opacity: 0, y: -20, x: '-50%' }}
-                  className={`absolute top-20 left-1/2 px-6 py-2 rounded-full font-bold text-sm shadow-xl z-50 flex items-center gap-2 border ${
+                  className={`absolute top-20 left-1/2 px-6 py-2 rounded-full font-bold text-base shadow-xl z-50 flex items-center gap-2 border ${
                     notification.type === 'ai' 
                       ? 'bg-purple-600 text-white border-purple-400' 
-                      : 'bg-teal-500 text-black border-teal-400'
+                      : notification.type === 'error'
+                        ? 'bg-red-600 text-white border-red-400'
+                        : 'bg-blue-500 text-white border-blue-600'
                   }`}
                 >
-                  {notification.type === 'ai' ? <Sparkles size={16} /> : <CheckCircle2 size={16} />}
+                  {notification.type === 'ai' ? <Sparkles size={16} /> : 
+                   notification.type === 'error' ? <X size={16} /> : <CheckCircle2 size={16} />}
                   {notification.message}
                 </motion.div>
               )}
             </AnimatePresence>
             <div className="glass-panel rounded-2xl overflow-hidden relative flex-[2] flex flex-col">
-              <div className="p-4 border-b border-slate-800 flex justify-between items-center z-10 bg-slate-900/40">
-                 <div className="flex bg-slate-800/50 p-1 rounded">
-                    <button className="text-[10px] font-bold px-4 py-1.5 rounded bg-teal-500 text-black uppercase tracking-widest">配置圖</button>
-                    <button className="text-[10px] font-bold px-4 py-1.5 rounded text-slate-400 hover:text-slate-200 uppercase tracking-widest">工程標示</button>
+              <div className="p-4 border-b border-slate-200 flex justify-between items-center z-10 bg-white/40">
+                 <div className="flex bg-slate-100/50 p-1 rounded">
+                    <button className="text-xs font-bold px-4 py-1.5 rounded bg-blue-500 text-white uppercase tracking-widest">配置圖</button>
+                    <button className="text-xs font-bold px-4 py-1.5 rounded text-slate-500 hover:text-slate-900 uppercase tracking-widest">工程標示</button>
                  </div>
-                 <div className="flex items-center gap-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                 <div className="flex items-center gap-2 text-xs font-bold text-slate-500 uppercase tracking-widest">
                     <Info size={12} /> 圖面檢視
                  </div>
               </div>
@@ -752,127 +957,23 @@ export default function App() {
                 </div>
               </div>
             </div>
-
-            {/* Topic List */}
-            <div className="flex-1 glass-panel rounded-2xl p-6 overflow-hidden flex flex-col">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">討論事項列表</h3>
-                <button 
-                  onClick={() => setShowAddTopic(!showAddTopic)}
-                  className="p-1.5 hover:bg-white/5 rounded text-teal-500 transition-colors"
-                >
-                  <Plus size={18} />
-                </button>
-              </div>
-
-              {showAddTopic && (
-                <div className="mb-4 flex gap-2">
-                  <input 
-                    type="text"
-                    value={newTopicName}
-                    onChange={(e) => setNewTopicName(e.target.value)}
-                    placeholder="輸入新空間名稱..."
-                    className="flex-1 bg-slate-900/50 border border-slate-700 rounded px-3 py-1.5 text-xs outline-none focus:border-teal-500/50"
-                  />
-                  <button 
-                    onClick={handleAddTopic}
-                    className="bg-teal-500 text-black px-3 py-1.5 rounded text-xs font-bold"
-                  >
-                    新增
-                  </button>
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 overflow-y-auto">
-                {customTopics.map((topic, i) => (
-                  <button 
-                    key={i}
-                    onClick={() => setSelectedSpace(topic)}
-                    className={`flex items-center gap-3 p-4 rounded-xl border transition-all ${selectedSpace === topic ? 'bg-teal-500/10 border-teal-500 text-teal-400' : 'glass-panel hover:bg-white/5 border-transparent text-slate-400'}`}
-                  >
-                    <div className={`p-2 rounded-lg ${selectedSpace === topic ? 'bg-teal-500 text-black' : 'bg-white/5'}`}>
-                      <Layout size={16} />
-                    </div>
-                    <span className="text-xs font-bold tracking-wider uppercase">{topic}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
           </div>
 
           {/* Right: Discussion Panel */}
           <div 
             onMouseDown={() => setIsResizing(true)}
-            className="w-1 cursor-col-resize bg-slate-800 hover:bg-teal-500/50 transition-colors shrink-0 z-20"
+            className="w-1 cursor-col-resize bg-slate-100 hover:bg-blue-500/50 transition-colors shrink-0 z-20"
           />
           <aside 
             style={{ width: rightSidebarWidth }}
-            className="border-l border-slate-800 bg-slate-900/30 flex flex-col shrink-0 overflow-hidden backdrop-blur-xl transition-[width] duration-0"
+            className="border-l border-slate-200 bg-white/30 flex flex-col shrink-0 overflow-hidden backdrop-blur-xl transition-[width] duration-0"
           >
-            {/* Panel Tabs */}
-            <div className="flex bg-slate-900/50 border-b border-slate-800">
-               <button 
-                  onClick={() => setSelectedSpace(null)}
-                  className={`flex-1 py-4 text-[10px] font-bold uppercase tracking-widest border-b-2 transition-all ${!selectedSpace || selectedSpace === 'specs' || selectedSpace === 'notes' || selectedSpace === 'checklist' ? 'border-teal-500 text-teal-400 bg-white/5' : 'border-transparent text-slate-500'}`}
-               >
-                  規範與查檢
-               </button>
-               <button 
-                  disabled={!selectedSpace}
-                  className={`flex-1 py-4 text-[10px] font-bold uppercase tracking-widest border-b-2 transition-all ${selectedSpace && selectedSpace !== 'specs' && selectedSpace !== 'notes' && selectedSpace !== 'checklist' ? 'border-teal-500 text-teal-400 bg-white/5' : 'border-transparent text-slate-500 disabled:opacity-30'}`}
-               >
-                  空間細部討論
-               </button>
-            </div>
-
             <div className="flex-1 overflow-y-auto p-6 space-y-8 scroll-smooth">
-              {selectedSpace === 'checklist' ? (
-                <div className="space-y-6">
-                   <div className="flex justify-between items-center bg-slate-900/40 p-4 rounded-2xl border border-slate-800">
-                    <div>
-                      <h3 className="font-light text-2xl text-slate-100 tracking-tight">討論查檢表</h3>
-                      <p className="text-[9px] text-slate-500 uppercase tracking-widest mt-1">Checklist deduplication available</p>
-                    </div>
-                    <div className="flex gap-2">
-                      <button 
-                        onClick={() => handleAiCleanup('checklist')}
-                        disabled={isCleaning || checklist.length === 0}
-                        className="p-2.5 bg-purple-600/20 text-purple-400 rounded-xl hover:bg-purple-600/30 transition-all border border-purple-500/30 flex items-center gap-2 text-[10px] font-bold uppercase disabled:opacity-50"
-                      >
-                        {isCleaning ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                        彙整重複
-                      </button>
-                      <button 
-                        onClick={() => setShowAddCheckModal(true)}
-                        className="p-2.5 bg-teal-500/20 text-teal-400 rounded-xl hover:bg-teal-500/30 transition-all border border-teal-500/30"
-                      >
-                        <Plus size={18} />
-                      </button>
-                    </div>
-                   </div>
-                   <div className="space-y-4">
-                      {checklist.map((item) => (
-                        <div key={item.id} className="flex items-center justify-between p-4 rounded-xl glass-panel hover:bg-white/5 transition-all group">
-                           <div 
-                             onClick={() => handleToggleCheck(item)}
-                             className="flex items-center gap-4 flex-1 cursor-pointer"
-                           >
-                             <div className={`w-5 h-5 rounded border flex items-center justify-center transition-all ${item.checked ? 'bg-teal-500 border-teal-500' : 'border-slate-700'}`}>
-                               {item.checked && <CheckCircle2 size={12} className="text-black" />}
-                             </div>
-                             <span className={`text-sm font-medium ${item.checked ? 'text-slate-500 line-through' : 'text-slate-300'}`}>{item.text}</span>
-                           </div>
-                           <button 
-                            onClick={() => handleDeleteCheck(item.id)}
-                            className="opacity-0 group-hover:opacity-100 p-1 text-slate-600 hover:text-red-500 transition-opacity"
-                           >
-                             <X size={14} />
-                           </button>
-                        </div>
-                      ))}
-                   </div>
+              {!selectedSpace ? (
+                <div className="flex items-center justify-center h-full text-slate-500 text-sm">
+                  請選擇一個空間進行細部討論
                 </div>
-              ) : selectedSpace && selectedSpace !== 'specs' && selectedSpace !== 'notes' ? (
+              ) : (
                 <AnimatePresence mode="wait">
                   <motion.div 
                     initial={{ opacity: 0, x: 20 }}
@@ -881,30 +982,46 @@ export default function App() {
                     className="space-y-6"
                   >
                     <div className="flex items-center justify-between">
-                       <h3 className="font-light text-2xl text-slate-100 tracking-tight">{selectedSpace} 討論紀錄</h3>
-                       <button onClick={() => setSelectedSpace(null)} className="p-2 hover:bg-white/5 rounded-full text-slate-500"><X size={20} /></button>
+                       <h3 className="font-light text-3xl text-slate-900 tracking-tight">{selectedSpace} 討論紀錄</h3>
+                       <button onClick={() => setSelectedSpace(null)} className="p-2 hover:bg-black/5 rounded-full text-slate-500"><X size={20} /></button>
                     </div>
 
                     {/* Requirements Alert */}
-                    <div className="bg-teal-500/5 border border-teal-500/20 rounded-2xl p-5 space-y-3">
-                       <span className="text-[10px] font-bold text-teal-400 uppercase tracking-widest">Spec Requirement</span>
+                    <div className="bg-blue-500/5 border border-blue-500/20 rounded-2xl p-5 space-y-3">
+                       <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-blue-600 uppercase tracking-widest">Spec Requirement</span>
+                       </div>
                        <ul className="space-y-3">
-                          {requirements.find(k => k.title.includes(selectedSpace || '') || (selectedSpace === '一般病房' && k.title.includes('病房')) || (selectedSpace === '公共活動區' && k.title.includes('公共')) )?.points.map((p, i) => (
-                            <li key={i} className="flex gap-3 text-sm text-slate-400 leading-relaxed font-light">
-                               <CheckCircle2 size={14} className="text-teal-500 shrink-0 mt-1" />
-                               <p>{p}</p>
-                            </li>
-                          )) || <p className="text-sm text-slate-500 italic">無特定規範，請討論一般設計細節</p>}
+                          {requirements.find(k => k.title === selectedSpace || k.title.includes(selectedSpace || '') || (selectedSpace === '一般病房' && k.title.includes('病房')) || (selectedSpace === '公共活動區' && k.title.includes('公共')) )?.points.map((p, i) => {
+                            // Extract category prefix if exists
+                            const match = p.match(/^【(.*?)】(.*)/);
+                            if (match) {
+                               return (
+                                 <li key={i} className="flex gap-3 text-base text-slate-700 leading-relaxed font-light">
+                                    <div className="shrink-0 mt-1">
+                                      <span className="text-xs font-bold bg-blue-500 text-white px-2 py-0.5 rounded uppercase">{match[1]}</span>
+                                    </div>
+                                    <p>{match[2].trim().replace(/^[:：]/, '').trim()}</p>
+                                 </li>
+                               );
+                            }
+                            return (
+                               <li key={i} className="flex gap-3 text-base text-slate-500 leading-relaxed font-light">
+                                  <CheckCircle2 size={14} className="text-blue-500 shrink-0 mt-1" />
+                                  <p>{p}</p>
+                               </li>
+                            );
+                          }) || <p className="text-base text-slate-500 italic">無特定規範，請討論一般設計細節</p>}
                        </ul>
                     </div>
 
                     {/* Feedback Form */}
                     <div className="space-y-4">
                       <div className="flex justify-between items-end">
-                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">護理長意見紀錄</label>
+                        <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">護理長意見紀錄</label>
                         <button 
                           onClick={startVoiceToText}
-                          className={`text-[10px] font-bold hover:underline cursor-pointer flex items-center gap-1 transition-all ${isListening ? 'text-red-500 animate-pulse' : 'text-teal-500'}`}
+                          className={`text-xs font-bold hover:underline cursor-pointer flex items-center gap-1 transition-all ${isListening ? 'text-red-500 animate-pulse' : 'text-blue-500'}`}
                         >
                           <Sparkles size={12} /> {isListening ? '收音中...' : 'AI 語音轉文字'}
                         </button>
@@ -912,25 +1029,35 @@ export default function App() {
                       <textarea 
                         value={newNote}
                         onChange={(e) => setNewNote(e.target.value)}
-                        placeholder={`記錄意見回饋...`}
-                        className="w-full h-40 p-5 bg-slate-900/50 border border-slate-700 rounded-xl text-sm text-slate-200 focus:border-teal-500/50 outline-none resize-none transition-all placeholder:text-slate-600"
+                        placeholder="記錄意見回饋..."
+                        className="w-full h-40 p-5 bg-[#F2F2F7] border border-slate-300 rounded-xl text-base text-slate-900 focus:border-blue-500/50 outline-none resize-none transition-all placeholder:text-slate-500"
                       />
                       <button 
                         onClick={handleAddNote}
                         disabled={!newNote.trim()}
-                        className="w-full py-4 bg-teal-500 text-black rounded-lg font-bold shadow-lg shadow-teal-500/20 hover:bg-teal-400 disabled:opacity-50 transition-all active:scale-95 text-xs uppercase tracking-widest"
+                        className="w-full py-4 bg-blue-500 text-white rounded-lg font-bold shadow-lg shadow-blue-500/20 hover:bg-blue-600 disabled:opacity-50 transition-all active:scale-95 text-sm uppercase tracking-widest"
                       >
                         儲存討論進度
                       </button>
                     </div>
 
                     {/* Local History */}
-                    <div className="space-y-4 pt-4 border-t border-slate-800">
-                       <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">當前會議紀錄</h4>
+                    <div className="space-y-4 pt-4 border-t border-slate-200">
+                       <div className="flex items-center justify-between">
+                         <h4 className="text-xs font-bold text-slate-500 uppercase tracking-widest">當前會議紀錄</h4>
+                         <button 
+                           onClick={handleCompleteMeeting}
+                           disabled={isCleaning}
+                           className="flex items-center gap-2 px-3 py-1.5 bg-blue-500 text-white rounded text-xs font-bold hover:bg-blue-600 disabled:opacity-50 transition-all active:scale-95 shadow-sm"
+                         >
+                           {isCleaning ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                           完成會議紀錄
+                         </button>
+                       </div>
                        {notes.filter(n => n.space === selectedSpace && n.floor === activeFloor).length === 0 ? (
                          <div className="text-center py-12 px-4 glass-panel border-dashed rounded-xl">
                             <MessageSquare size={32} className="mx-auto text-slate-800 mb-3" />
-                            <p className="text-xs text-slate-600 italic">目前無紀錄</p>
+                            <p className="text-sm text-slate-500 italic">目前無紀錄</p>
                          </div>
                        ) : (
                          notes.filter(n => n.space === selectedSpace && n.floor === activeFloor).map(n => (
@@ -939,206 +1066,16 @@ export default function App() {
                             note={n} 
                             onToggleStatus={handleToggleNoteStatus}
                             onDelete={handleDeleteNote}
-                           onEdit={(note) => setEditingNote(note)}
+                            onEdit={(note) => setEditingNote(note)}
                            />
                          ))
                        )}
                     </div>
                   </motion.div>
                 </AnimatePresence>
-              ) : selectedSpace === 'notes' ? (
-                <div className="space-y-6">
-                   <div className="flex justify-between items-center border-b border-slate-800 pb-4">
-                    <div>
-                      <h3 className="font-light text-2xl text-slate-100 tracking-tight">會議紀錄彙整</h3>
-                      <p className="text-[10px] text-slate-500 font-mono tracking-widest uppercase">ALL DISCUSSION LOGS</p>
-                    </div>
-                    <div className="flex gap-2">
-                       <button 
-                        onClick={handleAiSyncRequirements}
-                        disabled={isAnalyzing || notes.filter(n => n.status === 'confirmed').length === 0}
-                        className="flex items-center gap-2 px-4 py-2 bg-purple-500/10 text-purple-400 border border-purple-500/30 rounded-lg text-xs font-bold hover:bg-purple-500/20 transition-all disabled:opacity-30"
-                       >
-                         {isAnalyzing ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                         AI 分析並同步規範
-                       </button>
-                       <button className="text-teal-500 hover:bg-white/5 p-2 rounded transition-colors"><RotateCcw size={18} /></button>
-                    </div>
-                   </div>
-                   {notes.length === 0 ? (
-                     <p className="text-xs text-slate-600 text-center py-20 italic">尚未有任何結論，請開始討論</p>
-                   ) : (
-                     notes.map(n => (
-                        <NoteItem 
-                          key={n.id} 
-                          note={n} 
-                          showLabel 
-                          onToggleStatus={handleToggleNoteStatus}
-                          onDelete={handleDeleteNote}
-                        />
-                     ))
-                   )}
-                </div>
-              ) : (
-                <div className="space-y-8 pb-12">
-                   <div className="flex justify-between items-center bg-slate-900/40 p-4 rounded-2xl border border-slate-800">
-                    <div>
-                      <h3 className="font-light text-2xl text-slate-100 tracking-tight">改建工程重點</h3>
-                      <p className="text-[9px] text-slate-600 uppercase tracking-widest mt-1">Construction Specifications</p>
-                    </div>
-                    <button 
-                      onClick={() => handleAiCleanup('requirements')}
-                      disabled={isCleaning || requirements.length === 0}
-                      className="p-2.5 bg-purple-600/20 text-purple-400 rounded-xl hover:bg-purple-600/30 transition-all border border-purple-500/30 flex items-center gap-2 text-[10px] font-bold uppercase disabled:opacity-50"
-                    >
-                      {isCleaning ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                      彙整精簡規範
-                    </button>
-                   </div>
-                   {requirements.map((section, idx) => {
-                     const isExpanded = expandedReqIds.includes(section.id);
-                     return (
-                       <motion.div 
-                         key={section.id}
-                         initial={{ opacity: 0, y: 10 }}
-                         animate={{ opacity: 1, y: 0 }}
-                         transition={{ delay: idx * 0.05 }}
-                         className="glass-panel rounded-xl overflow-hidden hover:bg-white/5 transition-all relative group"
-                       >
-                          <div 
-                            onClick={() => toggleReqCollapse(section.id)}
-                            className="p-5 flex items-center justify-between cursor-pointer"
-                          >
-                             <h4 className="text-xs font-bold text-teal-400 flex items-center gap-3 uppercase tracking-wider">
-                               <span className="w-1.5 h-4 bg-teal-500 rounded-full" />
-                               {section.title}
-                             </h4>
-                             <div className="flex items-center gap-3">
-                                <button 
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setEditingReq({ id: section.id, title: section.title, points: [...section.points] });
-                                  }}
-                                  className="opacity-0 group-hover:opacity-100 p-2 text-teal-500 hover:bg-teal-500/10 rounded transition-all"
-                                >
-                                  <FileText size={14} />
-                                </button>
-                                <ChevronRight 
-                                  size={16} 
-                                  className={`text-slate-600 transition-transform ${isExpanded ? 'rotate-90' : ''}`} 
-                                />
-                             </div>
-                          </div>
-                          <AnimatePresence>
-                            {isExpanded && (
-                              <motion.div
-                                initial={{ height: 0, opacity: 0 }}
-                                animate={{ height: 'auto', opacity: 1 }}
-                                exit={{ height: 0, opacity: 0 }}
-                                className="px-6 pb-6"
-                              >
-                                <ul className="space-y-4 pt-2 border-t border-slate-800/50">
-                                  {section.points.map((p, i) => (
-                                    <li key={i} className="text-xs text-slate-400 leading-relaxed flex gap-4 font-light">
-                                      <div className="w-4 h-4 text-teal-500 mt-0.5 shrink-0">
-                                         <FileText size={12} />
-                                      </div>
-                                      {p}
-                                    </li>
-                                  ))}
-                                </ul>
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
-                       </motion.div>
-                     );
-                   })}
-                </div>
               )}
             </div>
-
-            {/* AI Assistant Hook */}
-            <div className="p-6 bg-slate-900/50 border-t border-slate-800 shrink-0 z-10">
-               <div className="mb-4 space-y-3 max-h-[250px] overflow-y-auto pr-2 custom-scrollbar">
-                 {chatMessages.length === 0 && (
-                   <div className="flex gap-2">
-                      <div className="bg-slate-800/80 text-slate-400 p-3 rounded-xl rounded-tl-none text-xs leading-relaxed max-w-[85%] border border-slate-700 font-light">
-                        您好！我是設計助理。您可以問我關於醫療規範或特定空間設計要求的問題。
-                      </div>
-                   </div>
-                 )}
-                 {chatMessages.map((msg, idx) => {
-                   const isAssistant = msg.role === 'assistant';
-                   const isCollapsed = collapsedChatIndices.includes(idx);
-                   return (
-                     <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                       <div className={`p-3 rounded-xl text-xs leading-relaxed max-w-[85%] shadow-sm relative group/msg ${
-                          msg.role === 'user' 
-                            ? 'bg-teal-500/10 text-teal-400 border border-teal-500/20 rounded-tr-none' 
-                            : 'bg-slate-800/80 text-slate-300 border border-slate-700 rounded-tl-none font-light prose prose-invert prose-xs shadow-none'
-                       }`}>
-                          {isAssistant && (
-                            <button 
-                              onClick={() => toggleChatCollapse(idx)}
-                              className="absolute -top-2 -right-2 bg-slate-900 border border-slate-700 p-1 rounded-full text-slate-500 hover:text-teal-400 opacity-0 group-hover/msg:opacity-100 transition-opacity z-10"
-                            >
-                              {isCollapsed ? <Plus size={10} /> : <X size={10} />}
-                            </button>
-                          )}
-                          {isAssistant ? (
-                            isCollapsed ? (
-                              <div className="flex items-center gap-2 text-slate-500 italic pb-1">
-                                <Sparkles size={10} />
-                                分析建議已收合...
-                              </div>
-                            ) : (
-                              <div className="markdown-body">
-                                <Markdown>{msg.content}</Markdown>
-                              </div>
-                            )
-                          ) : msg.content}
-                       </div>
-                     </div>
-                   );
-                 })}
-                 <div ref={chatEndRef} />
-               </div>
-               
-               <div className="flex gap-2 relative items-center">
-                  <input 
-                    type="file" 
-                    className="hidden" 
-                    ref={fileInputRef} 
-                    accept="image/*,.pdf,.doc,.docx"
-                    onChange={handleFileUpload}
-                  />
-                  <button 
-                    onClick={() => fileInputRef.current?.click()}
-                    className="p-2.5 text-slate-500 hover:text-teal-400 bg-slate-900/80 border border-slate-800 rounded transition-all"
-                    title="上傳圖片或文件分析"
-                  >
-                    <FileUp size={16} />
-                  </button>
-                  <div className="flex-1 relative">
-                    <input 
-                      type="text" 
-                      value={chatInput}
-                      onChange={(e) => setChatInput(e.target.value)}
-                      onKeyDown={(e) => (e.key === 'Enter' && !e.shiftKey) && handleAiQuery()}
-                      placeholder="查詢工程規範..." 
-                      className="w-full bg-slate-900/80 text-slate-200 border border-slate-800 rounded px-5 py-3 text-xs outline-none focus:border-teal-500/30 pr-12 transition-all placeholder:text-slate-600 font-light" 
-                    />
-                    <button 
-                      disabled={isAiLoading || !chatInput.trim()}
-                      onClick={handleAiQuery}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-teal-500 p-2 rounded hover:bg-white/5 disabled:opacity-30 transition-all font-mono"
-                    >
-                      {isAiLoading ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-                    </button>
-                  </div>
-               </div>
-            </div>
-          </aside>
+</aside>
         </div>
       </main>
 
@@ -1146,28 +1083,28 @@ export default function App() {
       <AnimatePresence>
         {editingReq && (
           <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setEditingReq(null)} className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm" />
-            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-2xl bg-slate-900 border border-slate-700 rounded-3xl shadow-2xl overflow-hidden p-8 space-y-6">
-              <h3 className="text-xl font-light text-slate-100">編輯規範內容</h3>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setEditingReq(null)} className="absolute inset-0 bg-[#F2F2F7]/80 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-2xl bg-white border border-slate-300 rounded-3xl shadow-2xl overflow-hidden p-8 space-y-6">
+              <h3 className="text-2xl font-light text-slate-900">編輯規範內容</h3>
               <div className="space-y-4">
                 <input 
                   type="text" 
                   value={editingReq.title}
                   onChange={(e) => setEditingReq({ ...editingReq, title: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-slate-200 outline-none focus:border-teal-500"
+                  className="w-full bg-[#F2F2F7] border border-slate-200 rounded-xl px-4 py-3 text-slate-900 outline-none focus:border-blue-500"
                 />
                 <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">規範要點 (每行一個)</label>
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">規範要點 (每行一個)</label>
                   <textarea 
                     value={editingReq.points.join('\n')}
                     onChange={(e) => setEditingReq({ ...editingReq, points: e.target.value.split('\n') })}
-                    className="w-full h-64 bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-300 outline-none focus:border-teal-500 resize-none font-light leading-relaxed"
+                    className="w-full h-64 bg-[#F2F2F7] border border-slate-200 rounded-xl px-4 py-3 text-base text-slate-700 outline-none focus:border-blue-500 resize-none font-light leading-relaxed"
                   />
                 </div>
               </div>
               <div className="flex gap-3 pt-4">
-                 <button onClick={() => setEditingReq(null)} className="flex-1 py-4 bg-slate-800 text-slate-300 rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-slate-700">取消</button>
-                 <button onClick={handleUpdateRequirement} className="flex-2 py-4 bg-teal-500 text-black rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-teal-400">儲存變更</button>
+                 <button onClick={() => setEditingReq(null)} className="flex-1 py-4 bg-slate-100 text-slate-700 rounded-xl font-bold text-sm uppercase tracking-widest hover:bg-slate-200">取消</button>
+                 <button onClick={handleUpdateRequirement} className="flex-2 py-4 bg-blue-500 text-white rounded-xl font-bold text-sm uppercase tracking-widest hover:bg-blue-600">儲存變更</button>
               </div>
             </motion.div>
           </div>
@@ -1175,19 +1112,19 @@ export default function App() {
 
         {editingNote && (
           <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setEditingNote(null)} className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm" />
-            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-xl bg-slate-900 border border-slate-700 rounded-3xl shadow-2xl overflow-hidden p-8 space-y-6">
-              <h3 className="text-xl font-light text-slate-100">編輯會議紀錄</h3>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setEditingNote(null)} className="absolute inset-0 bg-[#F2F2F7]/80 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-xl bg-white border border-slate-300 rounded-3xl shadow-2xl overflow-hidden p-8 space-y-6">
+              <h3 className="text-2xl font-light text-slate-900">編輯會議紀錄</h3>
               <div className="space-y-4">
                 <textarea 
                   value={editingNote.content}
                   onChange={(e) => setEditingNote({ ...editingNote, content: e.target.value })}
-                  className="w-full h-48 bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-300 outline-none focus:border-teal-500 resize-none font-light leading-relaxed"
+                  className="w-full h-48 bg-[#F2F2F7] border border-slate-200 rounded-xl px-4 py-3 text-base text-slate-700 outline-none focus:border-blue-500 resize-none font-light leading-relaxed"
                 />
               </div>
               <div className="flex gap-3 pt-4">
-                 <button onClick={() => setEditingNote(null)} className="flex-1 py-4 bg-slate-800 text-slate-300 rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-slate-700">取消</button>
-                 <button onClick={handleUpdateNote} className="flex-2 py-4 bg-teal-500 text-black rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-teal-400">儲存</button>
+                 <button onClick={() => setEditingNote(null)} className="flex-1 py-4 bg-slate-100 text-slate-700 rounded-xl font-bold text-sm uppercase tracking-widest hover:bg-slate-200">取消</button>
+                 <button onClick={handleUpdateNote} className="flex-2 py-4 bg-blue-500 text-white rounded-xl font-bold text-sm uppercase tracking-widest hover:bg-blue-600">儲存</button>
               </div>
             </motion.div>
           </div>
@@ -1195,19 +1132,19 @@ export default function App() {
 
         {showAddCheckModal && (
           <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowAddCheckModal(false)} className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm" />
-            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-md bg-slate-900 border border-slate-700 rounded-3xl shadow-2xl overflow-hidden p-8 space-y-6">
-              <h3 className="text-xl font-light text-slate-100">新增查檢項目</h3>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowAddCheckModal(false)} className="absolute inset-0 bg-[#F2F2F7]/80 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-md bg-white border border-slate-300 rounded-3xl shadow-2xl overflow-hidden p-8 space-y-6">
+              <h3 className="text-2xl font-light text-slate-900">新增查檢項目</h3>
               <input 
                 type="text" 
                 value={newCheckText}
                 onChange={(e) => setNewCheckText(e.target.value)}
                 placeholder="例如：病房門色樣確認..."
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-slate-200 outline-none focus:border-teal-500"
+                className="w-full bg-[#F2F2F7] border border-slate-200 rounded-xl px-4 py-3 text-slate-900 outline-none focus:border-blue-500"
               />
               <div className="flex gap-3 pt-4">
-                 <button onClick={() => setShowAddCheckModal(false)} className="flex-1 py-4 bg-slate-800 text-slate-300 rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-slate-700">取消</button>
-                 <button onClick={handleAddCheck} className="flex-2 py-4 bg-teal-500 text-black rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-teal-400">新增項目</button>
+                 <button onClick={() => setShowAddCheckModal(false)} className="flex-1 py-4 bg-slate-100 text-slate-700 rounded-xl font-bold text-sm uppercase tracking-widest hover:bg-slate-200">取消</button>
+                 <button onClick={handleAddCheck} className="flex-2 py-4 bg-blue-500 text-white rounded-xl font-bold text-sm uppercase tracking-widest hover:bg-blue-600">新增項目</button>
               </div>
             </motion.div>
           </div>
@@ -1220,46 +1157,46 @@ export default function App() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setShowAddMapModal(false)}
-              className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm"
+              className="absolute inset-0 bg-[#F2F2F7]/80 backdrop-blur-sm"
             />
             <motion.div 
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="relative w-full max-w-md bg-slate-900 border border-slate-700 rounded-3xl shadow-2xl overflow-hidden p-8 space-y-6"
+              className="relative w-full max-w-md bg-white border border-slate-300 rounded-3xl shadow-2xl overflow-hidden p-8 space-y-6"
             >
-               <h3 className="text-xl font-light text-slate-100">新增配置圖/樓層</h3>
+               <h3 className="text-2xl font-light text-slate-900">新增配置圖/樓層</h3>
                <div className="space-y-4">
                   <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">配置圖名稱</label>
+                    <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">配置圖名稱</label>
                     <input 
                       type="text"
                       value={newMapData.name}
                       onChange={(e) => setNewMapData(prev => ({ ...prev, name: e.target.value }))}
                       placeholder="例如：B2F 護理空間..."
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 outline-none focus:border-teal-500 transition-all font-mono"
+                      className="w-full bg-[#F2F2F7] border border-slate-200 rounded-xl px-4 py-3 text-base text-slate-900 outline-none focus:border-blue-500 transition-all font-mono"
                     />
                   </div>
                   <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">圖面網址 (Image 或 3D URL)</label>
+                    <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">圖面網址 (Image 或 3D URL)</label>
                     <input 
                       type="text"
                       value={newMapData.url}
                       onChange={(e) => setNewMapData(prev => ({ ...prev, url: e.target.value }))}
                       placeholder="https://..."
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 outline-none focus:border-teal-500 transition-all font-mono"
+                      className="w-full bg-[#F2F2F7] border border-slate-200 rounded-xl px-4 py-3 text-base text-slate-900 outline-none focus:border-blue-500 transition-all font-mono"
                     />
                   </div>
                   <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">類型</label>
+                    <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">類型</label>
                     <div className="flex gap-2">
                        <button 
                         onClick={() => setNewMapData(prev => ({ ...prev, type: 'image' }))}
-                        className={`flex-1 py-3 rounded-xl text-xs font-bold uppercase tracking-widest transition-all ${newMapData.type === 'image' ? 'bg-teal-500 text-black' : 'bg-slate-950 text-slate-500 border border-slate-800'}`}
+                        className={`flex-1 py-3 rounded-xl text-sm font-bold uppercase tracking-widest transition-all ${newMapData.type === 'image' ? 'bg-blue-500 text-white' : 'bg-[#F2F2F7] text-slate-500 border border-slate-200'}`}
                        >2D 圖片</button>
                        <button 
                         onClick={() => setNewMapData(prev => ({ ...prev, type: '3d' }))}
-                        className={`flex-1 py-3 rounded-xl text-xs font-bold uppercase tracking-widest transition-all ${newMapData.type === '3d' ? 'bg-teal-500 text-black' : 'bg-slate-950 text-slate-500 border border-slate-800'}`}
+                        className={`flex-1 py-3 rounded-xl text-sm font-bold uppercase tracking-widest transition-all ${newMapData.type === '3d' ? 'bg-blue-500 text-white' : 'bg-[#F2F2F7] text-slate-500 border border-slate-200'}`}
                        >3D 模型</button>
                     </div>
                   </div>
@@ -1267,12 +1204,12 @@ export default function App() {
                <div className="flex gap-3 pt-4">
                  <button 
                   onClick={() => setShowAddMapModal(false)}
-                  className="flex-1 py-4 bg-slate-800 text-slate-300 rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-slate-700 transition-all"
+                  className="flex-1 py-4 bg-slate-100 text-slate-700 rounded-xl font-bold text-sm uppercase tracking-widest hover:bg-slate-200 transition-all"
                  >取消</button>
                  <button 
                   onClick={handleAddMap}
                   disabled={!newMapData.name || !newMapData.url}
-                  className="flex-2 py-4 bg-teal-500 text-black rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-teal-400 disabled:opacity-50 transition-all"
+                  className="flex-2 py-4 bg-blue-500 text-white rounded-xl font-bold text-sm uppercase tracking-widest hover:bg-blue-600 disabled:opacity-50 transition-all"
                  >儲存圖面</button>
                </div>
             </motion.div>
@@ -1280,7 +1217,7 @@ export default function App() {
         )}
 
         {showApiModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
             <motion.div 
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -1289,40 +1226,40 @@ export default function App() {
             >
               <button 
                 onClick={() => setShowApiModal(false)}
-                className="absolute top-4 right-4 text-slate-500 hover:text-white"
+                className="absolute top-4 right-4 text-slate-500 hover:text-slate-900"
               >
                 <X size={20} />
               </button>
               
               <div className="flex flex-col items-center text-center space-y-4 mb-8">
-                <div className="bg-teal-500/20 p-4 rounded-full text-teal-500">
+                <div className="bg-blue-500/20 p-4 rounded-full text-blue-500">
                   <Key size={32} />
                 </div>
-                <h3 className="text-xl font-light text-slate-100 uppercase tracking-tight">設定專屬 API KEY</h3>
-                <p className="text-xs text-slate-400 leading-relaxed">
+                <h3 className="text-2xl font-light text-slate-900 uppercase tracking-tight">設定專屬 API KEY</h3>
+                <p className="text-sm text-slate-500 leading-relaxed">
                   若您希望使用自定義的 Gemini API Key，請在此輸入。這將覆蓋系統預設的金鑰。金鑰將僅存在於本次瀏覽，不會持久存儲於伺服器。
                 </p>
               </div>
 
               <div className="space-y-4">
                 <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Gemini API Key</label>
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Gemini API Key</label>
                   <input 
                     type="text"
                     value={apiKey}
                     onChange={(e) => setApiKey(e.target.value)}
                     placeholder="在此貼上您的 AIza... 開頭金鑰"
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-teal-400 outline-none focus:border-teal-500 transition-all font-mono"
+                    className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-base text-blue-600 outline-none focus:border-blue-500 transition-all font-mono"
                   />
                 </div>
                 <button 
                   onClick={handleSetApiKey}
-                  className="w-full py-4 bg-teal-500 text-black font-bold rounded-xl text-xs uppercase tracking-widest hover:bg-teal-400 transition-all active:scale-95"
+                  className="w-full py-4 bg-blue-500 text-white font-bold rounded-xl text-sm uppercase tracking-widest hover:bg-blue-600 transition-all active:scale-95"
                 >
                   確認並連結 AI
                 </button>
-                <p className="text-[10px] text-center text-slate-500">
-                  尚未有金鑰？ <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-teal-500 hover:underline">前往 Google AI Studio 獲取</a>
+                <p className="text-xs text-center text-slate-500">
+                  尚未有金鑰？ <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">前往 Google AI Studio 獲取</a>
                 </p>
               </div>
             </motion.div>
@@ -1333,37 +1270,94 @@ export default function App() {
   );
 }
 
-function NavItem({ icon, label, active, onClick, collapsed }: { icon: React.ReactNode, label: string, active: boolean, onClick: () => void, collapsed: boolean }) {
+function NavItem({ 
+  icon, 
+  label, 
+  active, 
+  onClick, 
+  collapsed,
+  onDoubleClick,
+  isEditing,
+  editValue,
+  onEditChange,
+  onEditSubmit,
+  onEditCancel,
+  onDelete
+}: { 
+  icon: React.ReactNode, 
+  label: string, 
+  active: boolean, 
+  onClick: () => void, 
+  collapsed: boolean,
+  onDoubleClick?: () => void,
+  isEditing?: boolean,
+  editValue?: string,
+  onEditChange?: (val: string) => void,
+  onEditSubmit?: () => void,
+  onEditCancel?: () => void,
+  onDelete?: () => void
+}) {
+  if (isEditing) {
+    return (
+      <div className="w-full flex items-center gap-2 p-2 rounded-lg bg-blue-500/5 border border-blue-500 mb-1">
+         <input 
+            autoFocus
+            type="text" 
+            value={editValue}
+            onChange={(e) => onEditChange?.(e.target.value)}
+            onKeyDown={(e) => {
+               if (e.key === 'Enter') onEditSubmit?.();
+               if (e.key === 'Escape') onEditCancel?.();
+            }}
+            onBlur={onEditSubmit}
+            className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-sm text-blue-600 outline-none"
+         />
+      </div>
+    );
+  }
+
   return (
-    <button 
-      onClick={onClick}
-      className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-300 group ${
-        active 
-          ? 'bg-teal-500/10 text-teal-400 border border-teal-500/20 active-tab' 
-          : 'text-slate-500 hover:bg-white/5 hover:text-slate-300'
-      } ${collapsed && 'justify-center'}`}
-    >
-      <span className={`${active ? 'text-teal-500' : 'text-slate-600 group-hover:text-teal-400'} transition-colors`}>{icon}</span>
-      {!collapsed && <span className="truncate text-[11px] font-medium uppercase tracking-wider">{label}</span>}
-    </button>
+    <div className="relative group/nav mb-1">
+      <button 
+        onClick={onClick}
+        onDoubleClick={onDoubleClick}
+        title={onDoubleClick ? "雙擊可編輯名稱" : ""}
+        className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-300 ${
+          active 
+            ? 'bg-blue-500/10 text-blue-600 border border-blue-500/20 active-tab' 
+            : 'text-slate-500 hover:bg-black/5 hover:text-slate-700'
+        } ${collapsed && 'justify-center'}`}
+      >
+        <span className={`${active ? 'text-blue-500' : 'text-slate-500 group-hover:text-blue-600'} transition-colors shrink-0`}>{icon}</span>
+        {!collapsed && <span className="truncate text-sm font-bold uppercase tracking-wider">{label}</span>}
+      </button>
+      {!collapsed && onDelete && !active && (
+        <button 
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          className="absolute right-2 top-1/2 -translate-y-1/2 p-1 bg-red-500 text-white rounded-md opacity-0 group-hover/nav:opacity-100 transition-opacity"
+        >
+          <X size={12} />
+        </button>
+      )}
+    </div>
   );
 }
 
 function Hotspot({ label, color = "blue", onClick }: { label: string, color?: string, onClick: () => void }) {
-  const colorClass = color === "blue" ? "bg-teal-500 text-black box-shadow-teal" : "bg-red-500 text-white shadow-red-500/30";
+  const colorClass = color === "blue" ? "bg-blue-500 text-white shadow-blue-500/30" : "bg-red-500 text-white shadow-red-500/30";
 
   return (
     <button 
       onClick={onClick}
       className={`relative flex items-center justify-center group active:scale-90 transition-all z-10`}
     >
-      <span className={`absolute flex h-10 w-10 items-center justify-center rounded-full ${color === "blue" ? "bg-teal-500" : "bg-red-500"} opacity-20 animate-ping`} />
-      <span className={`relative w-8 h-8 rounded-full ${colorClass} border-4 border-slate-900 shadow-2xl flex items-center justify-center scale-100 group-hover:scale-110 transition-transform`}>
+      <span className={`absolute flex h-10 w-10 items-center justify-center rounded-full ${color === "blue" ? "bg-blue-500" : "bg-red-500"} opacity-20 animate-ping`} />
+      <span className={`relative w-8 h-8 rounded-full ${colorClass} border-4 border-white shadow-2xl flex items-center justify-center scale-100 group-hover:scale-110 transition-transform`}>
          <Layout size={12} />
       </span>
       
-      <div className={`absolute bottom-full mb-3 left-1/2 -translate-x-1/2 p-0.5 rounded bg-slate-900 border border-slate-800 shadow-2xl opacity-0 group-hover:opacity-100 transition-all translate-y-2 group-hover:translate-y-0 whitespace-nowrap z-[100]`}>
-        <div className={`px-3 py-1.5 rounded text-[10px] font-bold tracking-widest uppercase ${color === 'blue' ? 'text-teal-400' : 'text-red-400'}`}>
+      <div className={`absolute bottom-full mb-3 left-1/2 -translate-x-1/2 p-0.5 rounded bg-white border border-slate-200 shadow-2xl opacity-0 group-hover:opacity-100 transition-all translate-y-2 group-hover:translate-y-0 whitespace-nowrap z-[100]`}>
+        <div className={`px-3 py-1.5 rounded text-xs font-bold tracking-widest uppercase ${color === 'blue' ? 'text-blue-600' : 'text-red-400'}`}>
            {label}
         </div>
       </div>
@@ -1376,13 +1370,13 @@ function NoteItem({ note, showLabel = false, onToggleStatus, onDelete, onEdit }:
     <motion.div 
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className={`p-4 glass-panel rounded-xl hover:bg-white/5 transition-all group border-l-2 ${note.status === 'confirmed' ? 'border-l-emerald-500' : 'border-l-teal-500/50'}`}
+      className={`p-4 glass-panel rounded-xl hover:bg-black/5 transition-all group border-l-2 ${note.status === 'confirmed' ? 'border-l-emerald-500' : 'border-l-blue-500/50'}`}
     >
       <div className="flex justify-between items-start mb-2">
         <div className="flex items-center gap-2">
-          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-600">{note.timestamp}</span>
+          <span className="text-xs font-bold uppercase tracking-widest text-slate-500">{note.timestamp}</span>
           {note.status === 'confirmed' && (
-            <span className="text-[9px] font-black bg-emerald-500 text-black px-1.5 rounded uppercase tracking-tighter">Confirmed</span>
+            <span className="text-[10px] font-black bg-emerald-500 text-white px-1.5 rounded uppercase tracking-tighter">Confirmed</span>
           )}
         </div>
         <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1395,14 +1389,14 @@ function NoteItem({ note, showLabel = false, onToggleStatus, onDelete, onEdit }:
            </button>
            <button 
             onClick={() => onEdit(note)}
-            className="text-slate-500 hover:text-teal-400 p-1"
+            className="text-slate-500 hover:text-blue-600 p-1"
             title="編輯內容"
            >
             <FileText size={12} />
            </button>
            <button 
             onClick={() => onDelete(note.id)}
-            className="text-slate-600 hover:text-red-500 p-1"
+            className="text-slate-500 hover:text-red-500 p-1"
             title="刪除紀錄"
            >
             <X size={12} />
@@ -1410,11 +1404,11 @@ function NoteItem({ note, showLabel = false, onToggleStatus, onDelete, onEdit }:
         </div>
       </div>
       {showLabel && (
-        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-teal-500/10 text-teal-400 text-[9px] font-bold rounded mb-3 tracking-widest uppercase border border-teal-500/20">
+        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-blue-500/10 text-blue-600 text-[10px] font-bold rounded mb-3 tracking-widest uppercase border border-blue-500/20">
           {note.floor} • {note.space}
         </span>
       )}
-      <p className={`text-xs leading-relaxed italic tracking-wide ${note.status === 'confirmed' ? 'text-slate-100 font-medium' : 'text-slate-300 font-light'}`}>
+      <p className={`text-sm leading-relaxed italic tracking-wide ${note.status === 'confirmed' ? 'text-slate-900 font-medium' : 'text-slate-700 font-light'}`}>
         「{note.content}」
       </p>
     </motion.div>
