@@ -75,76 +75,124 @@ ${JSON.stringify(DESIGN_SPECS.keyPoints, null, 2)}
 `;
 
 export async function askAiAssistant(query: string) {
-  try {
-    const aiClient = getAiClient();
-    if (!aiClient) {
-      return "尚未完成 AI 設定。請在左側邊欄設定 API Key。";
+  let retries = 0;
+  const maxRetries = 2;
+  
+  while (retries <= maxRetries) {
+    try {
+      const aiClient = getAiClient();
+      if (!aiClient) {
+        return "尚未完成 AI 設定。請在左側邊欄設定 API Key。";
+      }
+      
+      const response = await aiClient.models.generateContent({
+        model: DEFAULT_MODEL,
+        contents: [{ role: 'user', parts: [{ text: query }] }],
+        config: {
+          systemInstruction: SYSTEM_PROMPT,
+        },
+      });
+      
+      return response.text;
+    } catch (error: any) {
+      console.error(`AI Assistant Error (Attempt ${retries + 1}):`, error);
+      
+      // Handle Rate Limit (429)
+      if (error?.status === 429 || error?.code === 429) {
+        if (retries < maxRetries) {
+          retries++;
+          const delay = Math.pow(2, retries) * 1000;
+          console.warn(`Gemini API Rate Limited. Retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+        return "AI 目前負載過高 (Rate Limit)，請稍候再試。";
+      }
+
+      return "抱歉，AI 助理目前遇到錯誤。請確認您的 API Key 是否正確且具備權限。";
     }
-    
-    const response = await aiClient.models.generateContent({
-      model: DEFAULT_MODEL,
-      contents: [{ role: 'user', parts: [{ text: query }] }],
-      config: {
-        systemInstruction: SYSTEM_PROMPT,
-      },
-    });
-    
-    return response.text;
-  } catch (error: any) {
-    console.error("AI Assistant Error:", error);
-    return "抱歉，AI 助理目前遇到錯誤。請確認您的 API Key 是否正確且具備權限。";
   }
+  return "AI 助理連線逾時，請稍後再試。";
 }
 
 export async function analyzeNotesToRequirements(currentRequirements: any[], confirmedNotes: any[]) {
-  try {
-    const aiClient = getAiClient();
-    if (!aiClient) throw new Error("AI client not initialized");
-    
-    const prompt = `
-現有規範：
-${JSON.stringify(currentRequirements, null, 2)}
+  let retries = 0;
+  const maxRetries = 2;
 
-最新的會議討論紀錄：
+  while (retries <= maxRetries) {
+    try {
+      const aiClient = getAiClient();
+      if (!aiClient) throw new Error("AI client not initialized");
+      
+      const prompt = `
+### 現有規範資料 (Current Requirements) ###
+${JSON.stringify(currentRequirements.map(r => ({ title: r.title, points: r.points })), null, 2)}
+
+### 最新會議討論紀錄 (New Meeting Notes) ###
 ${JSON.stringify(confirmedNotes.map(n => n.content), null, 2)}
 
-請根據以上會議討論紀錄，產出更新後的完整規範 JSON。`;
-
-    const result = await aiClient.models.generateContent({
-      model: DEFAULT_MODEL,
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      config: {
-        responseMimeType: "application/json",
-        systemInstruction: `妳是一位專業的建築規範分析師與資深編輯。
-任務：分析會議討論紀錄（Notes），將其中的核心「設計要求」或「規格決議」強制提取出來，並整合進現有的「工程規範（Requirements）」中。不論紀錄狀態為何，都必須視為確認的需求並整併。
-
-規則：
-1. **去重與彙整 (核心任務)**：務必檢查新提取的內容是否與現有規範重複。若內容相近或相同，請合併條目。
-2. **邏輯歸類**：將要求按照工程類別（如：門窗工程、機電工程、安全防護等）進行邏輯分組。
-3. **取消標籤前綴**：【不要】在每個 points 的項目開頭加上【類別】標籤。請直接描述規範內容。
-4. **輸出格式**：必須是純 JSON 陣列。物件格式：[{ title: string, points: string[] }]。其中 title 代表工程或空間類別，points 則是該類別下的具體事項。
-5. **強制更新**：你必須將新的會議紀錄內容體現到 points 裡，不能忽略任何一筆合理的工程討論。`
-      }
-    });
-
-    const text = result.text;
-    if (!text) return null;
+任務：請將「最新會議討論紀錄」內容彙整進「現有規範資料」中。
     
-    // Clean JSON string if LLM returns markdown blocks
-    const jsonStr = text.replace(/```json|```/gi, "").trim();
-    return JSON.parse(jsonStr);
-  } catch (error) {
-    console.error("AI Analysis Error:", error);
-    return null;
+### 執行指令 (Directives) ###
+1. **分類整理 (嚴格要求)**：將所有規範依據工程類別進行「標題 (Title)」分類。
+   * 妳 **必須** 優先且僅能將內容歸類至以下 11 個類別：
+     - **醫療氣體設備**
+     - **燈光控制**
+     - **空調設備**
+     - **衛浴設備**
+     - **櫥櫃/家具**
+     - **天花板**
+     - **地面工程**
+     - **牆壁/油漆**
+     - **電力/資訊**
+     - **消防設備**
+     - **門窗工程**
+2. **去重檢查**：如果新紀錄的內容與現有的規範項目（points）重複或語意相同，則「不要新增」該項目。
+3. **原地保留與擴充**：
+   * 除非新的紀錄內容與現有項目「有直接衝突」或「需要修正更新」，否則必須「完整保留」現有的所有規範項目。
+   * 新的規範項目請增加在對應分類的 points 陣列之後。
+4. **輸出格式**：必須是 JSON 陣列。格式：[{ title: string, points: string[] }]。
+5. **專業用詞**：使用繁體中文專業建築/水電工程術語。
+`;
+
+      const result = await aiClient.models.generateContent({
+        model: DEFAULT_MODEL,
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        config: {
+          responseMimeType: "application/json",
+          systemInstruction: `妳是一位專業的建築規範分析師與資深編輯。妳擅長進行重複性檢查與資訊增量更新。妳必須確保現有的規範內容不被無故刪除，且新內容能精確歸類。`
+        }
+      });
+
+      const text = result.text;
+      if (!text) return null;
+      
+      // Clean JSON string if LLM returns markdown blocks
+      const jsonStr = text.replace(/```json|```/gi, "").trim();
+      return JSON.parse(jsonStr);
+    } catch (error: any) {
+      console.error(`AI Analysis Error (Attempt ${retries + 1}):`, error);
+      if ((error?.status === 429 || error?.code === 429) && retries < maxRetries) {
+        retries++;
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, retries) * 1000));
+        continue;
+      }
+      return null;
+    }
   }
+  return null;
 }
 
 export async function deduplicateData(type: 'requirements' | 'checklist', data: any[]) {
-  try {
-    const aiClient = getAiClient();
-    if (!aiClient) throw new Error("AI client not initialized");
+  let retries = 0;
+  const maxRetries = 1;
 
-    const prompt = `
+  while (retries <= maxRetries) {
+    try {
+      const aiClient = getAiClient();
+      if (!aiClient) throw new Error("AI client not initialized");
+
+      const prompt = `
 請協助彙整並清理以下${type === 'requirements' ? '工程規範' : '查檢清單'}資料。
 目標：
 1. **移除重複**：內容相同或語意高度重疊的項目必須合併。
@@ -152,29 +200,39 @@ export async function deduplicateData(type: 'requirements' | 'checklist', data: 
 3. **保持專業**：使用專業的繁體中文工程術語。
 
 待清理資料：
-${JSON.stringify(data, null, 2)}
+${JSON.stringify(data.map(d => {
+  if (type === 'requirements') return { title: d.title, points: d.points };
+  return { text: d.text, checked: d.checked };
+}), null, 2)}
 
 請輸出清理後的完整 JSON 陣列。
 ${type === 'requirements' ? '物件格式: [{ title: string, points: string[] }]' : '物件格式: [{ text: string, checked: boolean, order: number }]'}
     `;
 
-    const result = await aiClient.models.generateContent({
-      model: DEFAULT_MODEL,
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      config: {
-        responseMimeType: "application/json",
-        systemInstruction: `妳是一位資深的數據清洗專家與工程合約編輯。妳的目標是將冗長的清單轉化為精煉、不重複且具備高度邏輯性的技術文獻。`
-      }
-    });
+      const result = await aiClient.models.generateContent({
+        model: DEFAULT_MODEL,
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        config: {
+          responseMimeType: "application/json",
+          systemInstruction: `妳是一位資深的數據清洗專家與工程合約編輯。妳的目標是將冗長的清單轉化為精煉、不重複且具備高度邏輯性的技術文獻。`
+        }
+      });
 
-    const text = result.text;
-    if (!text) return null;
-    const jsonStr = text.replace(/```json|```/gi, "").trim();
-    return JSON.parse(jsonStr);
-  } catch (error) {
-    console.error("AI Cleanup Error:", error);
-    return null;
+      const text = result.text;
+      if (!text) return null;
+      const jsonStr = text.replace(/```json|```/gi, "").trim();
+      return JSON.parse(jsonStr);
+    } catch (error: any) {
+      console.error(`AI Cleanup Error (Attempt ${retries + 1}):`, error);
+      if ((error?.status === 429 || error?.code === 429) && retries < maxRetries) {
+        retries++;
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        continue;
+      }
+      return null;
+    }
   }
+  return null;
 }
 
 export async function analyzeFileToSpecs(fileData: { data: string, mimeType: string }) {

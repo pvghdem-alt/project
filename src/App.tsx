@@ -337,7 +337,11 @@ export default function App() {
     setIsCleaning(true);
     setNotification({ message: 'AI 正在整合會議紀錄至工程規範...', type: 'ai' });
     try {
-      const thisSpaceReqs = requirements.filter(r => r.title === selectedSpace || r.title.includes(selectedSpace));
+      const CATEGORIES = ['醫療氣體設備', '燈光控制', '空調設備', '衛浴設備', '櫥櫃/家具', '天花板', '地面工程', '牆壁/油漆', '電力/資訊', '消防設備', '門窗工程'];
+      const currentSpaceReqs = requirements.filter(r => r.title === selectedSpace || r.title.includes(selectedSpace));
+      const categoryReqs = requirements.filter(r => CATEGORIES.includes(r.title));
+      const sourceReqs = [...currentSpaceReqs, ...categoryReqs];
+      
       const sourceNotes = notes.filter(n => n.space === selectedSpace && n.floor === activeFloor);
 
       if (sourceNotes.length === 0) {
@@ -348,22 +352,36 @@ export default function App() {
       }
 
       const updatedReqs = await analyzeNotesToRequirements(
-        thisSpaceReqs.length ? thisSpaceReqs : [{ id: 'new', title: selectedSpace, points: [] }], 
+        sourceReqs.length ? sourceReqs : [{ title: selectedSpace, points: [] }], 
         sourceNotes
       );
       
       if (updatedReqs && updatedReqs.length > 0) {
-          const req = updatedReqs[0];
-          const existing = requirements.find(r => r.title === req.title || r.title.includes(selectedSpace));
-          if (existing && !existing.id.startsWith('default-')) {
-            await updateDoc(doc(db, 'requirements', existing.id), {
-              points: req.points,
-              updatedAt: serverTimestamp()
-            });
-          } else {
-            await addDoc(collection(db, 'requirements'), { ...req, title: existing ? existing.title : selectedSpace, updatedAt: serverTimestamp() });
+          const batch = writeBatch(db);
+          
+          for (const req of updatedReqs) {
+            // Find matching requirement in Firestore data
+            const existing = requirements.find(r => 
+              r.title === req.title
+            );
+
+            if (existing && !existing.id.startsWith('default-') && existing.id !== 'new') {
+              batch.update(doc(db, 'requirements', existing.id), {
+                points: req.points,
+                updatedAt: serverTimestamp()
+              });
+            } else {
+              // Either default or doesn't exist, create a new doc
+              const newRef = doc(collection(db, 'requirements'));
+              batch.set(newRef, { 
+                title: req.title, 
+                points: req.points, 
+                updatedAt: serverTimestamp() 
+              });
+            }
           }
-          setNotification({ message: '工程規範已自動彙整！', type: 'success' });
+          await batch.commit();
+          setNotification({ message: '工程規範已自動彙整分類！', type: 'success' });
       } else {
           setNotification({ message: '無更新的規範', type: 'success' });
       }
@@ -398,8 +416,8 @@ export default function App() {
   const handleUpdateRequirement = async () => {
     if (!editingReq) return;
     try {
-      if (editingReq.id.startsWith('default-')) {
-        // Create new doc since it was just local fallback
+      if (editingReq.id.startsWith('default-') || editingReq.id === 'new') {
+        // Create new doc since it was just local fallback or placeholder
         await addDoc(collection(db, 'requirements'), {
           title: editingReq.title,
           points: editingReq.points,
@@ -1192,10 +1210,10 @@ export default function App() {
                         </button>
                       </div>
 
-                      <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[1fr,1.2fr] gap-6 lg:gap-8 overflow-hidden">
+                      <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[1fr,1.2fr] gap-6 lg:gap-8 overflow-y-auto xl:overflow-hidden">
                         {/* Requirements - Scrollable */}
-                        <div className="flex flex-col h-full min-h-[300px]">
-                          <div className="bg-blue-600/5 border border-blue-500/10 rounded-2xl p-6 h-full overflow-y-auto custom-scrollbar">
+                        <div className="flex flex-col h-fit xl:h-full min-h-[300px]">
+                          <div className="bg-blue-600/5 border border-blue-500/10 rounded-2xl p-6 h-fit xl:h-full xl:overflow-y-auto custom-scrollbar">
                             <div className="flex justify-between items-center mb-6 sticky top-0 bg-transparent backdrop-blur-sm pb-2">
                               <h4 className="text-xs font-black text-blue-600 uppercase tracking-widest flex items-center gap-2">
                                 <ShieldAlert size={14} /> 細部設計規範
@@ -1212,12 +1230,14 @@ export default function App() {
                             </div>
                             <div className="space-y-6">
                               {(() => {
+                                const CATEGORIES = ['醫療氣體設備', '燈光控制', '空調設備', '衛浴設備', '櫥櫃/家具', '天花板', '地面工程', '牆壁/油漆', '電力/資訊', '消防設備', '門窗工程'];
                                 const filtered = requirements.filter(k => 
                                   k.title === selectedSpace || 
                                   k.title.includes(selectedSpace || '') || 
                                   (selectedSpace === '一般病房' && k.title.includes('病房')) || 
                                   (selectedSpace === '保護室' && k.title.includes('保護室')) ||
-                                  (selectedSpace === '公共活動區' && k.title.includes('公共'))
+                                  (selectedSpace === '公共活動區' && k.title.includes('公共')) ||
+                                  (CATEGORIES.includes(k.title) && k.points.length > 0)
                                 );
 
                                 if (filtered.length === 0) return <p className="text-slate-500 text-sm italic">無特定規範，請討論一般設計細節</p>;
@@ -1243,7 +1263,7 @@ export default function App() {
                         </div>
 
                         {/* Note area - Right side */}
-                        <div className="flex flex-col h-full space-y-6 overflow-hidden">
+                        <div className="flex flex-col h-fit xl:h-full space-y-6 overflow-visible xl:overflow-hidden">
                           <div className="space-y-3 shrink-0">
                             <div className="flex justify-between items-center">
                               <label className="text-xs font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
