@@ -33,7 +33,8 @@ import {
   Image as ImageIcon,
   FileUp,
   Copy,
-  GripVertical
+  GripVertical,
+  Edit
 } from 'lucide-react';
 import { motion, AnimatePresence, Reorder } from 'motion/react';
 import Markdown from 'react-markdown';
@@ -117,6 +118,7 @@ interface RequirementCategory {
   id: string;
   title: string;
   points: string[];
+  space?: string;
 }
 
 interface Note {
@@ -337,7 +339,7 @@ export default function App() {
     setIsCleaning(true);
     setNotification({ message: 'AI 正在整合會議紀錄至工程規範...', type: 'ai' });
     try {
-      const CATEGORIES = ['醫療氣體設備', '燈光控制', '空調設備', '衛浴設備', '櫥櫃/家具', '天花板', '地面工程', '牆壁/油漆', '電力/資訊', '消防設備', '門窗工程'];
+      const CATEGORIES = ['醫療氣體設備', '燈光控制', '空調設備', '衛浴設備', '櫥櫃/家具', '天花板', '地面工程', '牆壁/油漆', '電力/資訊', '消防設備', '門窗工程', '護士呼叫系統'];
       const currentSpaceReqs = requirements.filter(r => r.title === selectedSpace || r.title.includes(selectedSpace));
       const categoryReqs = requirements.filter(r => CATEGORIES.includes(r.title));
       const sourceReqs = [...currentSpaceReqs, ...categoryReqs];
@@ -353,16 +355,17 @@ export default function App() {
 
       const updatedReqs = await analyzeNotesToRequirements(
         sourceReqs.length ? sourceReqs : [{ title: selectedSpace, points: [] }], 
-        sourceNotes
+        sourceNotes,
+        selectedSpace
       );
       
       if (updatedReqs && updatedReqs.length > 0) {
           const batch = writeBatch(db);
           
           for (const req of updatedReqs) {
-            // Find matching requirement in Firestore data
+            // Find matching requirement in Firestore data for this specific space
             const existing = requirements.find(r => 
-              r.title === req.title
+              r.title === req.title && r.space === selectedSpace
             );
 
             if (existing && !existing.id.startsWith('default-') && existing.id !== 'new') {
@@ -376,6 +379,7 @@ export default function App() {
               batch.set(newRef, { 
                 title: req.title, 
                 points: req.points, 
+                space: selectedSpace,
                 updatedAt: serverTimestamp() 
               });
             }
@@ -632,7 +636,7 @@ export default function App() {
       const sourceNotes = notes.filter(n => n.status === 'confirmed');
       const analysisInput = sourceNotes.length > 0 ? sourceNotes : notes;
       
-      const updatedReqs = await analyzeNotesToRequirements(requirements, analysisInput);
+      const updatedReqs = await analyzeNotesToRequirements(requirements, analysisInput, selectedSpace || 'General');
       
       if (updatedReqs && Array.isArray(updatedReqs)) {
         const batch = writeBatch(db);
@@ -640,7 +644,7 @@ export default function App() {
         // Update requirements in Firestore
         for (const req of updatedReqs) {
           // If title matches existing, update. Otherwise create new.
-          const existing = requirements.find(r => r.title === req.title);
+          const existing = requirements.find(r => r.title === req.title && r.space === (selectedSpace || 'General'));
           if (existing) {
             batch.update(doc(db, 'requirements', existing.id), {
               points: req.points,
@@ -648,7 +652,11 @@ export default function App() {
             });
           } else {
             const reqRef = doc(collection(db, 'requirements'));
-            batch.set(reqRef, { ...req, updatedAt: serverTimestamp() });
+            batch.set(reqRef, { 
+              ...req, 
+              space: selectedSpace || 'General',
+              updatedAt: serverTimestamp() 
+            });
           }
         }
         await batch.commit();
@@ -1210,47 +1218,42 @@ export default function App() {
                         </button>
                       </div>
 
-                      <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[1fr,1.2fr] gap-6 lg:gap-8 overflow-y-auto xl:overflow-hidden">
+                      <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[1fr,400px] gap-6 lg:gap-8 overflow-hidden">
                         {/* Requirements - Scrollable */}
-                        <div className="flex flex-col h-fit xl:h-full min-h-[300px]">
-                          <div className="bg-blue-600/5 border border-blue-500/10 rounded-2xl p-6 h-fit xl:h-full xl:overflow-y-auto custom-scrollbar">
+                        <div className="flex flex-col h-full min-h-[300px]">
+                          <div className="bg-blue-600/5 border border-blue-500/10 rounded-2xl p-6 h-full overflow-y-auto custom-scrollbar">
                             <div className="flex justify-between items-center mb-6 sticky top-0 bg-transparent backdrop-blur-sm pb-2">
-                              <h4 className="text-xs font-black text-blue-600 uppercase tracking-widest flex items-center gap-2">
-                                <ShieldAlert size={14} /> 細部設計規範
+                              <h4 className="text-sm font-black text-blue-600 uppercase tracking-widest flex items-center gap-2">
+                                <ShieldAlert size={16} /> 細部設計規範
                               </h4>
-                              <button 
-                                onClick={() => {
-                                  const req = requirements.find(k => k.title === selectedSpace || k.title.includes(selectedSpace || ''));
-                                  if (req) setEditingReq({ id: req.id, title: req.title, points: req.points });
-                                }}
-                                className="text-[10px] font-black text-blue-400 hover:text-blue-600 transition-colors bg-white px-2 py-1 rounded-full shadow-sm"
-                              >
-                                手動編輯
-                              </button>
                             </div>
                             <div className="space-y-6">
                               {(() => {
-                                const CATEGORIES = ['醫療氣體設備', '燈光控制', '空調設備', '衛浴設備', '櫥櫃/家具', '天花板', '地面工程', '牆壁/油漆', '電力/資訊', '消防設備', '門窗工程'];
+                                const CATEGORIES = ['醫療氣體設備', '燈光控制', '空調設備', '衛浴設備', '櫥櫃/家具', '天花板', '地面工程', '牆壁/油漆', '電力/資訊', '消防設備', '門窗工程', '護士呼叫系統'];
                                 const filtered = requirements.filter(k => 
-                                  k.title === selectedSpace || 
-                                  k.title.includes(selectedSpace || '') || 
-                                  (selectedSpace === '一般病房' && k.title.includes('病房')) || 
-                                  (selectedSpace === '保護室' && k.title.includes('保護室')) ||
-                                  (selectedSpace === '公共活動區' && k.title.includes('公共')) ||
-                                  (CATEGORIES.includes(k.title) && k.points.length > 0)
+                                  (k.space === selectedSpace) ||
+                                  (!k.space && (k.title === selectedSpace || k.title.includes(selectedSpace || '')))
                                 );
 
                                 if (filtered.length === 0) return <p className="text-slate-500 text-sm italic">無特定規範，請討論一般設計細節</p>;
 
-                                return filtered.map((cat, idx) => (
-                                  <div key={idx} className="space-y-3">
-                                    <h5 className="text-[10px] font-black text-blue-500/70 border-l-4 border-blue-500 pl-3 py-0.5">
-                                      {cat.title}
-                                    </h5>
+                                return filtered.map((cat) => (
+                                  <div key={cat.id} className="space-y-3 p-4 bg-white/40 rounded-xl border border-blue-500/5 group">
+                                    <div className="flex justify-between items-center">
+                                      <h5 className="text-sm font-black text-blue-600 border-l-4 border-blue-500 pl-3 py-1 uppercase tracking-tight">
+                                        {cat.title}
+                                      </h5>
+                                      <button 
+                                        onClick={() => setEditingReq({ id: cat.id, title: cat.title, points: cat.points })}
+                                        className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 hover:bg-blue-100 text-blue-600 rounded-lg"
+                                      >
+                                        <Edit size={14} />
+                                      </button>
+                                    </div>
                                     <ul className="space-y-2.5 pl-1">
                                       {cat.points.map((p, i) => (
-                                        <li key={i} className="flex gap-2.5 text-sm text-slate-700 leading-relaxed group">
-                                          <div className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0 mt-2 transition-transform group-hover:scale-125" />
+                                        <li key={i} className="flex gap-2.5 text-sm text-slate-700 leading-relaxed group/item">
+                                          <div className="w-1.2 h-1.2 rounded-full bg-blue-300 shrink-0 mt-2 transition-transform group-hover/item:scale-125" />
                                           <p className="flex-1">{p}</p>
                                         </li>
                                       ))}
@@ -1262,16 +1265,16 @@ export default function App() {
                           </div>
                         </div>
 
-                        {/* Note area - Right side */}
-                        <div className="flex flex-col h-fit xl:h-full space-y-6 overflow-visible xl:overflow-hidden">
-                          <div className="space-y-3 shrink-0">
+                        {/* Note area - Right side (Floating Column) */}
+                        <div className="flex flex-col h-full space-y-6 overflow-hidden">
+                          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 space-y-4 shadow-sm shrink-0">
                             <div className="flex justify-between items-center">
-                              <label className="text-xs font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                              <label className="text-xs font-black text-blue-600 uppercase tracking-widest flex items-center gap-2">
                                 <MessageSquare size={14} /> 意見與回饋
                               </label>
                               <button 
                                 onClick={startVoiceToText}
-                                className={`text-[10px] font-bold flex items-center gap-2 px-3 py-1.5 rounded-full transition-all ${isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-blue-50 text-blue-500 hover:bg-blue-100'}`}
+                                className={`text-[10px] font-bold flex items-center gap-2 px-3 py-1.5 rounded-full transition-all ${isListening ? 'bg-red-500 text-white animate-pulse' : 'bg-white text-blue-500 hover:bg-blue-50 border border-blue-100 shadow-sm'}`}
                               >
                                 <Sparkles size={12} /> {isListening ? '收音中...' : '語音輸入'}
                               </button>
@@ -1279,13 +1282,13 @@ export default function App() {
                             <textarea 
                               value={newNote}
                               onChange={(e) => setNewNote(e.target.value)}
-                              placeholder="在此輸入討論細節、變更要求..."
-                              className="w-full h-32 p-4 bg-slate-50 border border-slate-200 rounded-2xl text-base text-slate-900 focus:bg-white focus:border-blue-500 shadow-inner outline-none resize-none transition-all placeholder:text-slate-400"
+                              placeholder="在此輸入討論細節、變更要求（建議白話即可，AI 會自動修飾）..."
+                              className="w-full h-24 p-4 bg-white border border-slate-200 rounded-xl text-base text-slate-900 focus:border-blue-500 shadow-inner outline-none resize-none transition-all placeholder:text-slate-400"
                             />
                             <button 
                               onClick={handleAddNote}
                               disabled={!newNote.trim()}
-                              className="w-full py-3.5 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-xl font-black shadow-lg shadow-blue-500/20 hover:shadow-blue-500/40 hover:-translate-y-0.5 disabled:opacity-50 disabled:translate-y-0 transition-all active:scale-95 text-sm tracking-widest uppercase"
+                              className="w-full py-3 bg-blue-600 text-white rounded-xl font-black shadow-lg shadow-blue-500/10 hover:bg-blue-700 disabled:opacity-50 transition-all active:scale-[0.98] text-xs tracking-widest uppercase"
                             >
                               送出討論內容
                             </button>

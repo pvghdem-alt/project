@@ -115,7 +115,7 @@ export async function askAiAssistant(query: string) {
   return "AI 助理連線逾時，請稍後再試。";
 }
 
-export async function analyzeNotesToRequirements(currentRequirements: any[], confirmedNotes: any[]) {
+export async function analyzeNotesToRequirements(currentRequirements: any[], confirmedNotes: any[], selectedSpace: string) {
   let retries = 0;
   const maxRetries = 2;
 
@@ -125,17 +125,19 @@ export async function analyzeNotesToRequirements(currentRequirements: any[], con
       if (!aiClient) throw new Error("AI client not initialized");
       
       const prompt = `
-### 現有規範資料 (Current Requirements) ###
+### 目前空間：${selectedSpace} ###
+
+### 現有「${selectedSpace}」相關規範資料 ###
 ${JSON.stringify(currentRequirements.map(r => ({ title: r.title, points: r.points })), null, 2)}
 
 ### 最新會議討論紀錄 (New Meeting Notes) ###
 ${JSON.stringify(confirmedNotes.map(n => n.content), null, 2)}
 
-任務：請將「最新會議討論紀錄」內容彙整進「現有規範資料」中。
+任務：請將「最新會議討論紀錄」內容彙整進「現有規範資料」中，產出專屬於「${selectedSpace}」的完整工程規範。
     
 ### 執行指令 (Directives) ###
 1. **分類整理 (嚴格要求)**：將所有規範依據工程類別進行「標題 (Title)」分類。
-   * 妳 **必須** 優先且僅能將內容歸類至以下 11 個類別：
+   * 妳 **必須** 優先且僅能將內容歸類至以下 12 個類別：
      - **醫療氣體設備**
      - **燈光控制**
      - **空調設備**
@@ -147,12 +149,16 @@ ${JSON.stringify(confirmedNotes.map(n => n.content), null, 2)}
      - **電力/資訊**
      - **消防設備**
      - **門窗工程**
-2. **去重檢查**：如果新紀錄的內容與現有的規範項目（points）重複或語意相同，則「不要新增」該項目。
-3. **原地保留與擴充**：
+     - **護士呼叫系統** (註：護士呼叫、對講系統務必歸於此類，不得歸類於消防設備)
+2. **去重與語意合併**：如果新紀錄的內容與現有的規範項目（points）重複、語意相同或高度重疊，則「絕對不要重複新增」。請將新舊內容合併為一條最完整且清晰的描述。
+3. **文字修飾與專業化 (核心要求)**：使用者紀錄的內容通常較為「白話」或「口語化」，妳 **必須** 協助將其修飾為專業的工程技術用語。
+   * 例如：「插座要高一點」修飾為「插座安裝高度需配合後續維管需求提升高度至離地 120cm 以上（或適當高度）」。
+   * 例如：「不要用軟管」修飾為「蓮蓬頭設施應採用無軟管式設計，以維繫病房安全」。
+4. **原地保留與擴充**：
    * 除非新的紀錄內容與現有項目「有直接衝突」或「需要修正更新」，否則必須「完整保留」現有的所有規範項目。
    * 新的規範項目請增加在對應分類的 points 陣列之後。
-4. **輸出格式**：必須是 JSON 陣列。格式：[{ title: string, points: string[] }]。
-5. **專業用詞**：使用繁體中文專業建築/水電工程術語。
+5. **輸出格式**：必須是 JSON 陣列。格式：[{ title: string, points: string[] }]。
+6. **專業用詞**：使用繁體中文專業建築/水電工程術語。
 `;
 
       const result = await aiClient.models.generateContent({
