@@ -150,6 +150,7 @@ interface Topic {
   isDefault?: boolean;
   floorId?: string;
   order: number;
+  type?: 'space' | 'trade';
 }
 
 export default function App() {
@@ -162,7 +163,7 @@ export default function App() {
   
   // Custom Topics
   const [customTopics, setCustomTopics] = useState<Topic[]>([]);
-  const [showAddTopic, setShowAddTopic] = useState(false);
+  const [showAddTopic, setShowAddTopic] = useState<{ open: boolean, type: 'space' | 'trade' }>({ open: false, type: 'space' });
   const [newTopicName, setNewTopicName] = useState('');
 
   // API Key state
@@ -201,7 +202,8 @@ export default function App() {
   const [topicEditName, setTopicEditName] = useState('');
   const [editingFloorId, setEditingFloorId] = useState<string | null>(null);
   const [floorEditName, setFloorEditName] = useState('');
-  const [deleteConfirm, setDeleteConfirm] = useState<{ id: string, name: string, type: 'topic' | 'floor' } | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ id: string, name: string, type: 'topic' | 'floor' | 'requirement' } | null>(null);
+  const [analysisSummary, setAnalysisSummary] = useState<{ added: string[], merged: string[], updated: string[] } | null>(null);
   const [activeMainTab, setActiveMainTab] = useState<'discussion' | 'map'>('discussion');
   const [rightSidebarWidth, setRightSidebarWidth] = useState(400);
   const [expandedReqIds, setExpandedReqIds] = useState<string[]>([]);
@@ -293,11 +295,13 @@ export default function App() {
       if (data.length === 0) {
         // Seed default topics if nothing in DB
         const defaultTopics = [
-          { name: '護理站', isDefault: true, order: 0 },
-          { name: '一般病房', isDefault: true, order: 1 },
-          { name: '保護室', isDefault: true, order: 2 },
-          { name: '公共活動區', isDefault: true, order: 3 }
-        ];
+          { name: '護理站', isDefault: true, order: 0, type: 'space' },
+          { name: '一般病房', isDefault: true, order: 1, type: 'space' },
+          { name: '保護室', isDefault: true, order: 2, type: 'space' },
+          { name: '公共活動區', isDefault: true, order: 3, type: 'space' },
+          { name: '空調工程', isDefault: true, order: 4, type: 'trade' },
+          { name: '醫療氣體工程', isDefault: true, order: 5, type: 'trade' }
+        ] as const;
         defaultTopics.forEach((t, i) => {
           addDoc(collection(db, 'topics'), {
             ...t,
@@ -355,13 +359,15 @@ export default function App() {
          return;
       }
 
-      const updatedReqs = await analyzeNotesToRequirements(
+      const aiResult = await analyzeNotesToRequirements(
         sourceReqs.length ? sourceReqs : [{ title: selectedSpace, points: [] }], 
         sourceNotes,
         selectedSpace
       );
       
-      if (updatedReqs && updatedReqs.length > 0) {
+      if (aiResult && aiResult.requirements) {
+          const { requirements: updatedReqs, summary } = aiResult;
+          setAnalysisSummary(summary);
           const batch = writeBatch(db);
           
           for (const req of updatedReqs) {
@@ -865,7 +871,7 @@ export default function App() {
     }
   };
 
-  const handleAddTopic = async () => {
+  const handleAddTopic = async (type: 'space' | 'trade') => {
     const trimmedName = newTopicName.trim();
     if (!trimmedName) return;
 
@@ -875,7 +881,7 @@ export default function App() {
     );
 
     if (isDuplicate) {
-      setNotification({ message: '此空間名稱已存在', type: 'error' });
+      setNotification({ message: '此內容已存在', type: 'error' });
       setTimeout(() => setNotification(null), 2000);
       return;
     }
@@ -883,15 +889,16 @@ export default function App() {
     try {
       await addDoc(collection(db, 'topics'), {
         name: trimmedName,
+        type,
         createdAt: serverTimestamp(),
         creatorId: 'public',
-        floorId: activeFloor,
+        floorId: type === 'space' ? activeFloor : 'global',
         order: (customTopics[customTopics.length - 1]?.order || 0) + 1,
         isDefault: false
       });
       setNewTopicName('');
-      setShowAddTopic(false);
-      setNotification({ message: `空間「${trimmedName}」已新增`, type: 'success' });
+      setShowAddTopic({ open: false, type: 'space' });
+      setNotification({ message: `「${trimmedName}」已新增`, type: 'success' });
       setTimeout(() => setNotification(null), 2000);
     } catch (err) {
       console.error("Error adding topic:", err);
@@ -1013,39 +1020,39 @@ export default function App() {
              </div>
 
              <button 
-                onClick={() => setShowAddTopic(!showAddTopic)}
+                onClick={() => setShowAddTopic({ open: !showAddTopic.open || showAddTopic.type !== 'space', type: 'space' })}
                 className={`w-full flex items-center gap-3 px-4 py-2 text-blue-500 hover:bg-blue-50 rounded-lg transition-colors mb-2 ${!sidebarOpen && 'justify-center'}`}
              >
                 <PlusCircle size={18} />
                 {sidebarOpen && <span className="text-xs font-bold uppercase tracking-widest">新增設計空間</span>}
              </button>
 
-             {sidebarOpen && showAddTopic && (
+             {sidebarOpen && showAddTopic.open && showAddTopic.type === 'space' && (
                <div className="mb-4 flex flex-col gap-2 px-4 py-3 bg-blue-50/50 rounded-xl border border-blue-100 mx-2">
                  <input 
                    autoFocus
                    type="text"
                    value={newTopicName}
                    onChange={(e) => setNewTopicName(e.target.value)}
-                   onKeyDown={(e) => e.key === 'Enter' && handleAddTopic()}
+                   onKeyDown={(e) => e.key === 'Enter' && handleAddTopic('space')}
                    placeholder="例如：會客室、配膳間..."
                    className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500 transition-all"
                  />
                  <div className="flex gap-2">
                    <button 
-                     onClick={() => setShowAddTopic(false)}
+                     onClick={() => setShowAddTopic({ open: false, type: 'space' })}
                      className="flex-1 py-1.5 text-xs text-slate-500 font-bold hover:bg-white rounded border border-slate-200"
                    >取消</button>
                    <button 
-                     onClick={handleAddTopic}
+                     onClick={() => handleAddTopic('space')}
                      className="flex-1 py-1.5 bg-blue-500 text-white rounded text-xs font-bold shadow-sm"
                    >確認新增</button>
                  </div>
                </div>
              )}
 
-             <Reorder.Group axis="y" values={customTopics.filter(t => t.isDefault || t.floorId === activeFloor || t.floorId === 'global')} onReorder={handleReorderTopics} className="space-y-1">
-                {customTopics.filter(t => t.isDefault || t.floorId === activeFloor || t.floorId === 'global').map((topic) => (
+             <Reorder.Group axis="y" values={customTopics.filter(t => (t.type === 'space' || !t.type) && (t.isDefault || t.floorId === activeFloor || t.floorId === 'global'))} onReorder={handleReorderTopics} className="space-y-1">
+                {customTopics.filter(t => (t.type === 'space' || !t.type) && (t.isDefault || t.floorId === activeFloor || t.floorId === 'global')).map((topic) => (
                   <Reorder.Item key={topic.id} value={topic}>
                <NavItem 
                  key={topic.id}
@@ -1067,6 +1074,69 @@ export default function App() {
              </Reorder.Item>
            ))}
          </Reorder.Group>
+          </div>
+          <div className="h-px bg-slate-100 my-4" />
+
+          <div className="mb-4">
+             <div className="flex items-center justify-between px-4 mb-2">
+                <h3 className={`text-[10px] font-bold text-slate-400 uppercase tracking-widest ${!sidebarOpen && 'hidden'}`}>分項工程</h3>
+             </div>
+
+             <button 
+                onClick={() => setShowAddTopic({ open: !showAddTopic.open || showAddTopic.type !== 'trade', type: 'trade' })}
+                className={`w-full flex items-center gap-3 px-4 py-2 text-blue-500 hover:bg-blue-50 rounded-lg transition-colors mb-2 ${!sidebarOpen && 'justify-center'}`}
+             >
+                <PlusCircle size={18} />
+                {sidebarOpen && <span className="text-xs font-bold uppercase tracking-widest">新增分項工程</span>}
+             </button>
+
+             {sidebarOpen && showAddTopic.open && showAddTopic.type === 'trade' && (
+               <div className="mb-4 flex flex-col gap-2 px-4 py-3 bg-blue-50/50 rounded-xl border border-blue-100 mx-2">
+                 <input 
+                   autoFocus
+                   type="text"
+                   value={newTopicName}
+                   onChange={(e) => setNewTopicName(e.target.value)}
+                   onKeyDown={(e) => e.key === 'Enter' && handleAddTopic('trade')}
+                   placeholder="例如：空調工程、氣體工程..."
+                   className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500 transition-all"
+                 />
+                 <div className="flex gap-2">
+                   <button 
+                     onClick={() => setShowAddTopic({ open: false, type: 'trade' })}
+                     className="flex-1 py-1.5 text-xs text-slate-500 font-bold hover:bg-white rounded border border-slate-200"
+                   >取消</button>
+                   <button 
+                     onClick={() => handleAddTopic('trade')}
+                     className="flex-1 py-1.5 bg-blue-500 text-white rounded text-xs font-bold shadow-sm"
+                   >確認新增</button>
+                 </div>
+               </div>
+             )}
+
+             <Reorder.Group axis="y" values={customTopics.filter(t => t.type === 'trade')} onReorder={handleReorderTopics} className="space-y-1">
+                {customTopics.filter(t => t.type === 'trade').map((topic) => (
+                   <Reorder.Item key={topic.id} value={topic}>
+                <NavItem 
+                  key={topic.id}
+                  icon={<ClipboardList size={20} />} 
+                  label={topic.name} 
+                  active={selectedSpace === topic.name} 
+                  onClick={() => setSelectedSpace(topic.name)}
+                  collapsed={!sidebarOpen}
+                  onDoubleClick={() => !topic.isDefault && (setEditingTopicId(topic.id), setTopicEditName(topic.name))}
+                  isEditing={editingTopicId === topic.id}
+                  editValue={topicEditName}
+                  onEditChange={setTopicEditName}
+                  onEditSubmit={() => handleUpdateTopic(topic.id)}
+                  onEditCancel={() => setEditingTopicId(null)}
+                  onDelete={!topic.isDefault ? () => handleDeleteTopic(topic.id, topic.name) : undefined}
+                  onCopy={() => handleCopyTopic(topic)}
+                  isSortable={true}
+                />
+              </Reorder.Item>
+            ))}
+          </Reorder.Group>
           </div>
         </nav>
 
@@ -1262,11 +1332,7 @@ export default function App() {
                                         </button>
                                         {!cat.id.startsWith('default-') && (
                                           <button 
-                                            onClick={async () => {
-                                              if (window.confirm(`確定要刪除「${cat.title}」分類嗎？`)) {
-                                                await deleteDoc(doc(db, 'requirements', cat.id));
-                                              }
-                                            }}
+                                            onClick={() => setDeleteConfirm({ id: cat.id, name: cat.title, type: 'requirement' })}
                                             className="p-2 hover:bg-red-100 text-red-600 rounded-xl"
                                           >
                                             <Trash2 size={16} />
@@ -1336,6 +1402,7 @@ export default function App() {
                       <div className="absolute left-6 top-0 bottom-0 w-px bg-slate-100 z-0" />
                       <div className="relative z-10">
                         <NotesArchived 
+                          key={`${activeFloor}-${selectedSpace}`}
                           notes={notes.filter(n => n.space === selectedSpace && n.floor === activeFloor)}
                           onToggleStatus={handleToggleNoteStatus}
                           onDelete={handleDeleteNote}
@@ -1541,8 +1608,81 @@ export default function App() {
 
       {/* Custom Confirmation Modal */}
       <AnimatePresence>
+        {analysisSummary && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setAnalysisSummary(null)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-md" />
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+              <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-blue-600">
+                <div className="flex items-center gap-3 text-white">
+                  <Sparkles size={24} />
+                  <h3 className="text-2xl font-black tracking-tight uppercase">AI 彙整變更報告</h3>
+                </div>
+                <button onClick={() => setAnalysisSummary(null)} className="p-2 hover:bg-white/10 text-white rounded-full transition-colors">
+                  <X size={24} />
+                </button>
+              </div>
+              
+              <div className="flex-1 overflow-y-auto p-8 custom-scrollbar space-y-8">
+                <section className="space-y-4">
+                  <h4 className="flex items-center gap-2 text-emerald-600 font-black uppercase tracking-widest text-sm">
+                    <PlusCircle size={18} /> 新增規範項目 ({analysisSummary.added.length})
+                  </h4>
+                  {analysisSummary.added.length > 0 ? (
+                    <ul className="space-y-2">
+                      {analysisSummary.added.map((item, i) => (
+                        <li key={i} className="p-4 bg-emerald-50 border border-emerald-100 rounded-2xl text-slate-700 leading-relaxed font-medium">
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : <p className="text-slate-400 italic px-4">本次無新項目</p>}
+                </section>
+
+                <section className="space-y-4">
+                  <h4 className="flex items-center gap-2 text-blue-600 font-black uppercase tracking-widest text-sm">
+                    <Edit size={18} /> 優化/更新項目 ({analysisSummary.updated.length})
+                  </h4>
+                  {analysisSummary.updated.length > 0 ? (
+                    <ul className="space-y-2">
+                      {analysisSummary.updated.map((item, i) => (
+                        <li key={i} className="p-4 bg-blue-50 border border-blue-100 rounded-2xl text-slate-700 leading-relaxed font-medium">
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : <p className="text-slate-400 italic px-4">本次無更新</p>}
+                </section>
+
+                <section className="space-y-4">
+                  <h4 className="flex items-center gap-2 text-slate-600 font-black uppercase tracking-widest text-sm">
+                    <Copy size={18} /> 被合併/去重項目 ({analysisSummary.merged.length})
+                  </h4>
+                  {analysisSummary.merged.length > 0 ? (
+                    <ul className="space-y-2">
+                      {analysisSummary.merged.map((item, i) => (
+                        <li key={i} className="p-4 bg-slate-50 border border-slate-200 rounded-2xl text-slate-500 leading-relaxed line-through decoration-slate-300">
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : <p className="text-slate-400 italic px-4">本次無合併</p>}
+                </section>
+              </div>
+
+              <div className="p-6 bg-slate-50 border-t border-slate-100 flex justify-end">
+                <button 
+                  onClick={() => setAnalysisSummary(null)}
+                  className="px-8 py-4 bg-blue-600 text-white font-black rounded-2xl shadow-lg shadow-blue-500/20 hover:bg-blue-700 transition-all uppercase tracking-widest text-sm"
+                >
+                  確認並關閉報告
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
         {deleteConfirm && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[130] flex items-center justify-center p-4">
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -1576,8 +1716,10 @@ export default function App() {
                   onClick={() => {
                     if (deleteConfirm.type === 'topic') {
                       performDeleteTopic(deleteConfirm.id, deleteConfirm.name);
-                    } else {
+                    } else if (deleteConfirm.type === 'floor') {
                       performDeleteFloor(deleteConfirm.id);
+                    } else if (deleteConfirm.type === 'requirement') {
+                      deleteDoc(doc(db, 'requirements', deleteConfirm.id)).then(() => setDeleteConfirm(null));
                     }
                   }}
                   className="flex-1 py-3 px-4 bg-red-500 text-white font-bold rounded-xl hover:bg-red-600 transition-colors shadow-lg shadow-red-500/30"
@@ -1787,12 +1929,15 @@ function NotesArchived({ notes, onToggleStatus, onDelete, onEdit }: { notes: Not
 
   const dates = Object.keys(grouped).sort((a, b) => b.localeCompare(a));
 
+  const [hasAutoExpanded, setHasAutoExpanded] = useState(false);
+
   useEffect(() => {
-    // Expand latest date by default
-    if (dates.length > 0 && expandedDates.length === 0) {
+    // Expand latest date by default once dates are available
+    if (dates.length > 0 && !hasAutoExpanded) {
       setExpandedDates([dates[0]]);
+      setHasAutoExpanded(true);
     }
-  }, [dates]);
+  }, [dates, hasAutoExpanded]);
 
   const toggleDate = (date: string) => {
     setExpandedDates(prev => prev.includes(date) ? prev.filter(d => d !== date) : [...prev, date]);
