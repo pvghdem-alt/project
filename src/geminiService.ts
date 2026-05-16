@@ -1,17 +1,21 @@
 import { DESIGN_SPECS } from "./constants";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 let customApiKey: string | null = null;
+let genAI: GoogleGenerativeAI | null = null;
 
 export function setCustomApiKey(key: string) {
   if (!key || key.trim() === "") {
     customApiKey = null;
+    genAI = null;
     return;
   }
   customApiKey = key.trim();
-  console.log("Custom API Key stored.");
+  genAI = new GoogleGenerativeAI(customApiKey);
+  console.log("Custom API Key stored and initialized.");
 }
 
-const DEFAULT_MODEL = "gemini-2.0-flash";
+const DEFAULT_MODEL = "gemini-1.5-flash"; // Use compatible model alias
 
 const SYSTEM_PROMPT = `
 你是一位專業的醫療空間設計顧問，正在協助工程承辦人員與護理長討論「屏東榮總龍泉分院B棟3F、5F改建工程」。
@@ -39,8 +43,38 @@ async function callGeminiApi(options: {
   model?: string;
   responseMimeType?: string;
 }) {
+  // If we have a custom API key and we are likely on a static host (or proxy failed before)
+  // we try direct client call first to support GitHub Pages
+  if (customApiKey && genAI) {
+    try {
+      const modelName = options.model || DEFAULT_MODEL;
+      const model = genAI.getGenerativeModel({ 
+        model: modelName,
+        systemInstruction: options.systemInstruction 
+      });
+
+      let result;
+      if (options.contents) {
+        result = await model.generateContent({
+          contents: options.contents,
+          generationConfig: {
+            responseMimeType: options.responseMimeType || "text/plain",
+          }
+        });
+      } else {
+        result = await model.generateContent(options.query || "");
+      }
+
+      const response = await result.response;
+      return response.text();
+    } catch (clientError: any) {
+      console.warn("Client-side Gemini call failed, falling back to proxy:", clientError);
+      // If client call fails (e.g. invalid key), we still try the proxy as a last resort
+    }
+  }
+
   let retries = 0;
-  const maxRetries = 3;
+  const maxRetries = 2;
   
   while (retries <= maxRetries) {
     try {
@@ -54,6 +88,13 @@ async function callGeminiApi(options: {
       });
 
       if (!response.ok) {
+        // If we get a 404 or 405, it confirms the proxy route doesn't exist (e.g. GitHub Pages)
+        if (response.status === 404 || response.status === 405) {
+          if (!customApiKey) {
+            throw new Error("此環境不支援伺服器端 AI。請點擊左下角「API KEY」並設定您自己的 Gemini API Key 即可在 GitHub Pages 使用。");
+          }
+        }
+
         const errorData = await response.json().catch(() => ({}));
         const status = response.status;
         const message = errorData.error || response.statusText;
@@ -61,14 +102,11 @@ async function callGeminiApi(options: {
         if (status === 429) {
           if (retries < maxRetries) {
             retries++;
-            // Exponential backoff: 2s, 4s, 8s
-            // If the user hit a daily limit (limit: 0), this won't help, but for TPM/RPM it will.
             const backoff = Math.pow(2, retries) * 1000;
-            console.warn(`Gemini API 429 (Rate Limited). Attempt ${retries} of ${maxRetries}. Retrying in ${backoff}ms...`);
             await new Promise(resolve => setTimeout(resolve, backoff));
             continue;
           }
-          throw new Error("AI 額度已達上限 (Quota Exceeded)。如果您使用的是免費版（Free Tier），請稍等約一分鐘或是確認每日配額是否已滿。");
+          throw new Error("AI 額度已達上限。請稍後再試或檢查您的 API Key。");
         }
         
         throw new Error(message || `API Error ${status}`);
@@ -77,14 +115,12 @@ async function callGeminiApi(options: {
       const data = await response.json();
       return data.text;
     } catch (error: any) {
-      if (error.message?.includes("Quota Exceeded")) throw error;
-      
       if (retries < maxRetries) {
         retries++;
         await new Promise(resolve => setTimeout(resolve, 1000));
         continue;
       }
-      console.error("Gemini API Proxy Error:", error);
+      console.error("Gemini API Error:", error);
       throw error;
     }
   }

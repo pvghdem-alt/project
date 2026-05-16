@@ -1332,13 +1332,13 @@ export default function App() {
                  active={selectedSpace === topic.name} 
                  onClick={() => setSelectedSpace(topic.name)}
                  collapsed={!sidebarOpen}
-                 onDoubleClick={() => (!topic.isDefault || user) && (setEditingTopicId(topic.id), setTopicEditName(topic.name))}
+                  onDoubleClick={(user && (!topic.isDefault || user)) ? () => { setEditingTopicId(topic.id); setTopicEditName(topic.name); } : undefined}
                  isEditing={editingTopicId === topic.id}
                  editValue={topicEditName}
                  onEditChange={setTopicEditName}
                  onEditSubmit={() => handleUpdateTopic(topic.id)}
                  onEditCancel={() => setEditingTopicId(null)}
-                 onDelete={(!topic.isDefault || user) ? () => handleDeleteTopic(topic.id, topic.name) : undefined}
+                  onDelete={(user && (!topic.isDefault || user)) ? () => handleDeleteTopic(topic.id, topic.name) : undefined}
                  onCopy={user ? () => handleCopyTopic(topic) : undefined}
                  user={user}
                  isSortable={true}
@@ -1388,30 +1388,30 @@ export default function App() {
                </div>
              )}
 
-             <Reorder.Group axis="y" values={customTopics.filter(t => t.type === 'trade')} onReorder={handleReorderTopics} className="space-y-1">
-                {customTopics.filter(t => t.type === 'trade').map((topic) => (
+              <Reorder.Group axis="y" values={customTopics.filter(t => t.type === 'trade')} onReorder={handleReorderTopics} className="space-y-1">
+                 {customTopics.filter(t => t.type === 'trade').map((topic) => (
                    <Reorder.Item key={topic.id} value={topic} dragListener={!!user}>
-                <NavItem 
-                  key={topic.id}
-                  icon={<ClipboardList size={20} />} 
-                  label={topic.name} 
-                  active={selectedSpace === topic.name} 
-                  onClick={() => setSelectedSpace(topic.name)}
-                  collapsed={!sidebarOpen}
-                  user={user}
-                  onDoubleClick={(user && (!topic.isDefault || user)) ? () => { setEditingTopicId(topic.id); setTopicEditName(topic.name); } : undefined}
-                  isEditing={editingTopicId === topic.id}
-                  editValue={topicEditName}
-                  onEditChange={setTopicEditName}
-                  onEditSubmit={() => handleUpdateTopic(topic.id)}
-                  onEditCancel={() => setEditingTopicId(null)}
-                  onDelete={(user && (!topic.isDefault || user)) ? () => handleDeleteTopic(topic.id, topic.name) : undefined}
-                  onCopy={user ? () => handleCopyTopic(topic) : undefined}
-                  isSortable={true}
-                />
-              </Reorder.Item>
-            ))}
-          </Reorder.Group>
+                 <NavItem 
+                   key={topic.id}
+                   icon={<ClipboardList size={20} />} 
+                   label={topic.name} 
+                   active={selectedSpace === topic.name} 
+                   onClick={() => setSelectedSpace(topic.name)}
+                   collapsed={!sidebarOpen}
+                   user={user}
+                   onDoubleClick={(user && (!topic.isDefault || user)) ? () => { setEditingTopicId(topic.id); setTopicEditName(topic.name); } : undefined}
+                   isEditing={editingTopicId === topic.id}
+                   editValue={topicEditName}
+                   onEditChange={setTopicEditName}
+                   onEditSubmit={() => handleUpdateTopic(topic.id)}
+                   onEditCancel={() => setEditingTopicId(null)}
+                   onDelete={(user && (!topic.isDefault || user)) ? () => handleDeleteTopic(topic.id, topic.name) : undefined}
+                   onCopy={user ? () => handleCopyTopic(topic) : undefined}
+                   isSortable={true}
+                 />
+               </Reorder.Item>
+             ))}
+           </Reorder.Group>
           </div>
         </nav>
 
