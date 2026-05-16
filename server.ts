@@ -32,18 +32,36 @@ async function startServer() {
         }
       });
 
-      const modelName = model || "gemini-3-flash-preview";
-      
-      const response = await ai.models.generateContent({
-        model: modelName,
-        contents: contents || query,
-        config: {
-          systemInstruction,
-          responseMimeType: responseMimeType || undefined,
-        }
-      });
+      const modelsToTry = [model || "gemini-3-flash-preview", "gemini-1.5-pro", "gemini-1.5-flash"];
+      let lastError: any = null;
 
-      res.json({ text: response.text });
+      for (const modelName of modelsToTry) {
+        try {
+          const response = await ai.models.generateContent({
+            model: modelName,
+            contents: contents || query,
+            config: {
+              systemInstruction,
+              responseMimeType: responseMimeType || undefined,
+            }
+          });
+
+          return res.json({ text: response.text });
+        } catch (error: any) {
+          const status = error?.status || 500;
+          const message = error?.message || "Internal Server Error";
+          
+          if (status === 404 || status === 429 || message.includes("404") || message.includes("429") || message.includes("not found") || message.includes("Quota")) {
+            console.warn(`Server-side Gemini call failed for model ${modelName}:`, message);
+            lastError = error;
+            continue;
+          }
+          
+          throw error;
+        }
+      }
+      
+      throw lastError; // If all exhausted, throw the last error (usually 429)
     } catch (error: any) {
       console.error("Gemini API Error:", error);
       

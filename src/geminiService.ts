@@ -72,12 +72,15 @@ async function callGeminiApi(options: {
         console.warn(`Client-side Gemini call failed for model ${modelToTry}:`, clientError);
         lastError = clientError;
         
-        // If it's a 404 (not found) and we have more models to try, continue to the next one
-        if (clientError.message?.includes("not found") || clientError.status === 404 || clientError.message?.includes("404")) {
+        // If it's a 404 (not found) or 429 (quota), and we have more models to try, continue to the next one
+        if (
+          clientError.message?.includes("not found") || clientError.status === 404 || clientError.message?.includes("404") ||
+          clientError.status === 429 || clientError.message?.includes("429") || clientError.message?.includes("Quota exceeded")
+        ) {
           continue;
         }
 
-        break; // Stop trying models if it's not a 404 error
+        break; // Stop trying models if it's a different error
       }
     }
     
@@ -186,7 +189,8 @@ ${JSON.stringify(confirmedNotes.map(n => n.content), null, 2)}
      - **門窗工程**
      - **護士呼叫系統** (註：對講系統務必歸於此類)
 2. **強烈去重與語意合併 (嚴格要求)**：
-   * 【重要】在同一個類別中，如果「現有規範」與「新會議紀錄」存在相似、重疊的內容，**妳必須將它們合併成一條完整的敘述，絕對不可以保留兩條意思相近的項目**！
+   * 【全局唯一性】：同一項需求（或意思相近的需求）**全篇只能出現一次**，絕對不可以在不同類別中重複出現！如果某項需求涉及多個類別，請選擇最核心的**一個**類別歸入。
+   * 【同類別合併】：在同一個類別中，如果「現有規範」與「新會議紀錄」存在相似、重疊的內容，**妳必須將它們合併成一條完整的敘述，絕對不可以保留兩條意思相近的項目**！
    * 例如：現有規範「護理站與走道空間需實體實體牆物理區隔」，新紀錄「護理站要有獨立鎖固功能和獨立空間」，必須強烈合併為一條：「護理站須具備獨立鎖固功能，並與走道空間進行實體物理區隔。」而不是分別列出兩條。
 3. **文字修飾與專業化 (核心要求)**：
    * 將「白話」或「口語化」內容修飾為專業的工程技術用語。例如：「插座要高一點」修飾為「插座安裝高度需配合後續維管需求提升高度至離地 120cm 以上」。
