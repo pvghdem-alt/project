@@ -46,25 +46,32 @@ async function callGeminiApi(options: {
   if (customApiKey && genAI) {
     try {
       const modelName = options.model || DEFAULT_MODEL;
-      // Force v1 API for better compatibility with standard API keys
+      // Use v1beta which is more widely compatible for standard API keys especially on client-side
       const model = genAI.getGenerativeModel(
         { model: modelName },
-        { apiVersion: "v1" }
+        { apiVersion: "v1beta" }
       );
 
       let result;
-      // Incorporate system instruction into the prompt if provided
-      const systemContext = options.systemInstruction ? `系統提示：${options.systemInstruction}\n\n` : "";
+      // In v1beta, system instructions should be passed in the model initialization or as part of the content
+      // If we use systemInstruction in getGenerativeModel, we need to pass it as an object
+      const modelWithSystem = genAI.getGenerativeModel(
+        { 
+          model: modelName,
+          systemInstruction: options.systemInstruction 
+        },
+        { apiVersion: "v1beta" }
+      );
       
       if (options.contents) {
-        result = await model.generateContent({
+        result = await modelWithSystem.generateContent({
           contents: options.contents,
           generationConfig: {
             responseMimeType: options.responseMimeType || "text/plain",
           }
         });
       } else {
-        result = await model.generateContent(systemContext + (options.query || ""));
+        result = await modelWithSystem.generateContent(options.query || "");
       }
 
       const response = await result.response;
