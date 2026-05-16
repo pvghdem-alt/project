@@ -222,7 +222,8 @@ export default function App() {
   const [editingFloorId, setEditingFloorId] = useState<string | null>(null);
   const [floorEditName, setFloorEditName] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string, name: string, type: 'topic' | 'floor' | 'requirement' } | null>(null);
-  const [analysisSummary, setAnalysisSummary] = useState<{ added: string[], merged: string[], updated: string[] } | null>(null);
+  const [pendingAiResult, setPendingAiResult] = useState<{ requirements: any[], summary: any, sourceNotes: any[] } | null>(null);
+  const [selectedProposedPoints, setSelectedProposedPoints] = useState<Record<string, string[]>>({});
   const [activeMainTab, setActiveMainTab] = useState<'discussion' | 'photos' | 'map'>('discussion');
   const [rightSidebarWidth, setRightSidebarWidth] = useState(400);
   const [expandedReqIds, setExpandedReqIds] = useState<string[]>([]);
@@ -418,50 +419,22 @@ export default function App() {
       );
       
       if (aiResult && aiResult.requirements) {
-          const { requirements: updatedReqs, summary } = aiResult;
-          setAnalysisSummary(summary);
-          const batch = writeBatch(db);
-          
-          for (const req of updatedReqs) {
-            // Find matching requirement in Firestore data for this specific space
-            const existing = requirements.find(r => 
-              r.title === req.title && r.space === selectedSpace
-            );
-
-            if (existing && !existing.id.startsWith('default-') && existing.id !== 'new') {
-              batch.update(doc(db, 'requirements', existing.id), {
-                points: req.points,
-                updatedAt: serverTimestamp()
-              });
-            } else {
-              // Either default or doesn't exist, create a new doc
-              const newRef = doc(collection(db, 'requirements'));
-              batch.set(newRef, { 
-                title: req.title, 
-                points: req.points, 
-                space: selectedSpace,
-                updatedAt: serverTimestamp() 
-              });
-            }
-          }
-          
-          // Update note status to confirmed after integration
-          const noteUpdateBatch = writeBatch(db);
-          sourceNotes.forEach(n => {
-            if (n.status === 'pending') {
-              noteUpdateBatch.update(doc(db, 'notes', n.id), { status: 'confirmed' });
-            }
-          });
-          await noteUpdateBatch.commit();
-
-          await batch.commit();
-          setNotification({ message: '工程規範已自動彙整分類！', type: 'success' });
-      } else {
-          setNotification({ message: '無更新的規範', type: 'success' });
+        setPendingAiResult({
+          requirements: aiResult.requirements,
+          summary: aiResult.summary || { added: [], updated: [], merged: [] },
+          sourceNotes: sourceNotes
+        });
+        
+        // Initialize selectedProposedPoints with all points from the AI result
+        const initialSelected: Record<string, string[]> = {};
+        aiResult.requirements.forEach((req: any) => {
+          initialSelected[req.title] = req.points || [];
+        });
+        setSelectedProposedPoints(initialSelected);
       }
     } catch (e: any) {
       console.error(e);
-      setNotification({ message: e.message || '彙整失敗，請檢查 API Key 狀態', type: 'error' });
+      setNotification({ message: e.message || '分析失敗', type: 'error' });
     } finally {
       setIsCleaning(false);
       setTimeout(() => setNotification(null), 4000);
@@ -702,40 +675,34 @@ export default function App() {
     
     setIsAnalyzing(true);
     try {
-      // Use all confirmed notes for analysis. If no confirmed notes, use all notes.
-      const sourceNotes = notes.filter(n => n.status === 'confirmed');
-      const analysisInput = sourceNotes.length > 0 ? sourceNotes : notes;
+      // Use pending notes for the current space if any, otherwise all notes for current space
+      const sourceNotes = notes.filter(n => n.status === 'pending' && n.space === selectedSpace);
+      const analysisInput = sourceNotes.length > 0 ? sourceNotes : notes.filter(n => n.space === selectedSpace);
       
-      const updatedReqs = await analyzeNotesToRequirements(requirements, analysisInput, selectedSpace || 'General');
+      const aiResult = await analyzeNotesToRequirements(
+        requirements.filter(r => r.space === selectedSpace), 
+        analysisInput, 
+        selectedSpace || 'General'
+      );
       
-      if (updatedReqs && Array.isArray(updatedReqs)) {
-        const batch = writeBatch(db);
+      if (aiResult && aiResult.requirements) {
+        setPendingAiResult({
+          requirements: aiResult.requirements,
+          summary: aiResult.summary || { added: [], updated: [], merged: [] },
+          sourceNotes: analysisInput
+        });
         
-        // Update requirements in Firestore
-        for (const req of updatedReqs) {
-          // If title matches existing, update. Otherwise create new.
-          const existing = requirements.find(r => r.title === req.title && r.space === (selectedSpace || 'General'));
-          if (existing) {
-            batch.update(doc(db, 'requirements', existing.id), {
-              points: req.points,
-              updatedAt: serverTimestamp()
-            });
-          } else {
-            const reqRef = doc(collection(db, 'requirements'));
-            batch.set(reqRef, { 
-              ...req, 
-              space: selectedSpace || 'General',
-              updatedAt: serverTimestamp() 
-            });
-          }
-        }
-        await batch.commit();
-        setNotification({ message: 'AI 分析完成，工程規範已同步更新！', type: 'ai' });
-        setTimeout(() => setNotification(null), 4000);
+        // Initialize selectedProposedPoints with all points from the AI result
+        const initialSelected: Record<string, string[]> = {};
+        aiResult.requirements.forEach((req: any) => {
+          initialSelected[req.title] = req.points || [];
+        });
+        setSelectedProposedPoints(initialSelected);
       }
     } catch (err) {
       console.error("Analysis failed:", err);
-      alert("AI 分析失敗，請稍後再試。");
+      setNotification({ message: 'AI 分析失敗，請稍後再試。', type: 'error' });
+      setTimeout(() => setNotification(null), 3000);
     } finally {
       setIsAnalyzing(false);
     }
@@ -1177,6 +1144,55 @@ export default function App() {
     }
   };
 
+  const handleConfirmAiAnalysis = async () => {
+    if (!pendingAiResult || !selectedSpace) return;
+    setIsCleaning(true);
+    try {
+      const batch = writeBatch(db);
+      
+      // Use selectedProposedPoints instead of raw result
+      for (const title of Object.keys(selectedProposedPoints)) {
+        const points = selectedProposedPoints[title];
+        if (points.length === 0) continue;
+
+        const existing = requirements.find(r => 
+          r.title === title && r.space === selectedSpace
+        );
+
+        if (existing && !existing.id.startsWith('default-') && existing.id !== 'new') {
+          batch.update(doc(db, 'requirements', existing.id), {
+            points: points,
+            updatedAt: serverTimestamp()
+          });
+        } else {
+          const newRef = doc(collection(db, 'requirements'));
+          batch.set(newRef, { 
+            title: title, 
+            points: points, 
+            space: selectedSpace,
+            updatedAt: serverTimestamp() 
+          });
+        }
+      }
+
+      const noteUpdateBatch = writeBatch(db);
+      pendingAiResult.sourceNotes.forEach(n => {
+        noteUpdateBatch.update(doc(db, 'notes', n.id), { status: 'confirmed', updatedAt: serverTimestamp() });
+      });
+      await noteUpdateBatch.commit();
+      await batch.commit();
+
+      setPendingAiResult(null);
+      setNotification({ message: '工程規範已根據篩選結果更新！', type: 'success' });
+      setTimeout(() => setNotification(null), 3000);
+    } catch (err) {
+      console.error(err);
+      setNotification({ message: '應用變更失敗', type: 'error' });
+    } finally {
+      setIsCleaning(false);
+    }
+  };
+
   const handleResize = (e: MouseEvent) => {
     if (isResizing) {
       const newWidth = window.innerWidth - e.clientX;
@@ -1245,7 +1261,8 @@ export default function App() {
                  active={activeFloor === map.id} 
                  onClick={() => setActiveFloor(map.id)}
                  collapsed={!sidebarOpen}
-                 onDelete={() => handleDeleteFloor(map.id, map.name)}
+                 onDelete={user ? () => handleDeleteFloor(map.id, map.name) : undefined}
+                 user={user}
                  onDoubleClick={() => { setEditingFloorId(map.id); setFloorEditName(map.name); }}
                  isEditing={editingFloorId === map.id}
                  editValue={floorEditName}
@@ -1255,13 +1272,15 @@ export default function App() {
                />
              ))}
              
-             <button 
-               onClick={() => setShowAddMapModal(true)}
-               className={`w-full flex items-center gap-3 p-3 rounded-xl text-slate-500 hover:bg-black/5 hover:text-blue-600 transition-all border border-dashed border-slate-300 mt-2 ${!sidebarOpen && 'justify-center'}`}
-             >
-               <Plus size={18} />
-               {sidebarOpen && <span className="text-sm font-bold uppercase tracking-widest">新增配置圖</span>}
-             </button>
+             {user && (
+               <button 
+                 onClick={() => setShowAddMapModal(true)}
+                 className={`w-full flex items-center gap-3 p-3 rounded-xl text-slate-500 hover:bg-black/5 hover:text-blue-600 transition-all border border-dashed border-slate-300 mt-2 ${!sidebarOpen && 'justify-center'}`}
+               >
+                 <Plus size={18} />
+                 {sidebarOpen && <span className="text-sm font-bold uppercase tracking-widest">新增配置圖</span>}
+               </button>
+             )}
           </div>
 
           <div className="h-px bg-slate-100 my-4" />
@@ -1307,7 +1326,7 @@ export default function App() {
 
              <Reorder.Group axis="y" values={customTopics.filter(t => (t.type === 'space' || !t.type) && (t.isDefault || t.floorId === activeFloor || t.floorId === 'global'))} onReorder={handleReorderTopics} className="space-y-1">
                 {customTopics.filter(t => (t.type === 'space' || !t.type) && (t.isDefault || t.floorId === activeFloor || t.floorId === 'global')).map((topic) => (
-                  <Reorder.Item key={topic.id} value={topic}>
+                  <Reorder.Item key={topic.id} value={topic} dragListener={!!user}>
                <NavItem 
                  key={topic.id}
                  icon={<Layout size={20} />} 
@@ -1322,7 +1341,8 @@ export default function App() {
                  onEditSubmit={() => handleUpdateTopic(topic.id)}
                  onEditCancel={() => setEditingTopicId(null)}
                  onDelete={(!topic.isDefault || user) ? () => handleDeleteTopic(topic.id, topic.name) : undefined}
-                 onCopy={() => handleCopyTopic(topic)}
+                 onCopy={user ? () => handleCopyTopic(topic) : undefined}
+                 user={user}
                  isSortable={true}
                />
              </Reorder.Item>
@@ -1372,7 +1392,7 @@ export default function App() {
 
              <Reorder.Group axis="y" values={customTopics.filter(t => t.type === 'trade')} onReorder={handleReorderTopics} className="space-y-1">
                 {customTopics.filter(t => t.type === 'trade').map((topic) => (
-                   <Reorder.Item key={topic.id} value={topic}>
+                   <Reorder.Item key={topic.id} value={topic} dragListener={!!user}>
                 <NavItem 
                   key={topic.id}
                   icon={<ClipboardList size={20} />} 
@@ -1380,15 +1400,17 @@ export default function App() {
                   active={selectedSpace === topic.name} 
                   onClick={() => setSelectedSpace(topic.name)}
                   collapsed={!sidebarOpen}
-                  onDoubleClick={() => (!topic.isDefault || user) && (setEditingTopicId(topic.id), setTopicEditName(topic.name))}
+                  user={user}
+                  onDoubleClick={(user && (!topic.isDefault || user)) ? () => { setEditingTopicId(topic.id); setTopicEditName(topic.name); } : undefined}
                   isEditing={editingTopicId === topic.id}
                   editValue={topicEditName}
                   onEditChange={setTopicEditName}
                   onEditSubmit={() => handleUpdateTopic(topic.id)}
                   onEditCancel={() => setEditingTopicId(null)}
-                  onDelete={(!topic.isDefault || user) ? () => handleDeleteTopic(topic.id, topic.name) : undefined}
-                  onCopy={() => handleCopyTopic(topic)}
+                  onDelete={(user && (!topic.isDefault || user)) ? () => handleDeleteTopic(topic.id, topic.name) : undefined}
+                  onCopy={user ? () => handleCopyTopic(topic) : undefined}
                   isSortable={true}
+                  user={user}
                 />
               </Reorder.Item>
             ))}
@@ -2030,7 +2052,7 @@ export default function App() {
         )}
 
         {showApiModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+          <div className="fixed inset-0 z-[140] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
             <motion.div 
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -2078,77 +2100,114 @@ export default function App() {
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
 
-      {/* Custom Confirmation Modal */}
-      <AnimatePresence>
-        {analysisSummary && (
+        {pendingAiResult && (
           <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setAnalysisSummary(null)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-md" />
-            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setPendingAiResult(null)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-md" />
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-3xl bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
               <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-blue-600">
                 <div className="flex items-center gap-3 text-white">
                   <Sparkles size={24} />
-                  <h3 className="text-2xl font-black tracking-tight uppercase">AI 彙整變更報告</h3>
+                  <h3 className="text-2xl font-black tracking-tight uppercase">AI 彙整結果確認</h3>
                 </div>
-                <button onClick={() => setAnalysisSummary(null)} className="p-2 hover:bg-white/10 text-white rounded-full transition-colors">
+                <button onClick={() => setPendingAiResult(null)} className="p-2 hover:bg-white/10 text-white rounded-full transition-colors">
                   <X size={24} />
                 </button>
               </div>
               
               <div className="flex-1 overflow-y-auto p-8 custom-scrollbar space-y-8">
-                <section className="space-y-4">
-                  <h4 className="flex items-center gap-2 text-emerald-600 font-black uppercase tracking-widest text-sm">
-                    <PlusCircle size={18} /> 新增規範項目 ({analysisSummary.added.length})
-                  </h4>
-                  {analysisSummary.added.length > 0 ? (
-                    <ul className="space-y-2">
-                      {analysisSummary.added.map((item, i) => (
-                        <li key={i} className="p-4 bg-emerald-50 border border-emerald-100 rounded-2xl text-slate-700 leading-relaxed font-medium">
-                          {item}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : <p className="text-slate-400 italic px-4">本次無新項目</p>}
-                </section>
+                <div className="bg-blue-50 border border-blue-100 p-4 rounded-2xl flex gap-3 text-blue-700">
+                  <Info size={20} className="shrink-0 mt-0.5" />
+                  <p className="text-sm font-medium">請勾選您希望套用到工程規範中的項目。AI 已自動去重並優化描述。</p>
+                </div>
+
+                <div className="space-y-6">
+                  {pendingAiResult.requirements.filter(r => r.points && r.points.length > 0).map((req, ridx) => (
+                    <div key={ridx} className="space-y-3">
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                        <h4 className="text-sm font-black text-slate-900 uppercase tracking-widest">{req.title}</h4>
+                        <div className="flex gap-4">
+                          <button 
+                            onClick={() => setSelectedProposedPoints(prev => ({ ...prev, [req.title]: req.points }))}
+                            className="text-[10px] text-blue-600 font-bold hover:underline"
+                          >全選</button>
+                          <button 
+                            onClick={() => setSelectedProposedPoints(prev => ({ ...prev, [req.title]: [] }))}
+                            className="text-[10px] text-slate-400 font-bold hover:underline"
+                          >全不選</button>
+                        </div>
+                      </div>
+                      <div className="grid gap-2">
+                        {req.points.map((point: string, pidx: number) => {
+                          const isSelected = selectedProposedPoints[req.title]?.includes(point);
+                          return (
+                            <label key={pidx} className={`group flex items-start gap-4 p-4 rounded-2xl border-2 transition-all cursor-pointer ${isSelected ? 'border-emerald-500 bg-emerald-50' : 'border-slate-100 bg-white opacity-60 hover:opacity-100'}`}>
+                              <div className="mt-1">
+                                <input 
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedProposedPoints(prev => ({
+                                        ...prev,
+                                        [req.title]: [...(prev[req.title] || []), point]
+                                      }));
+                                    } else {
+                                      setSelectedProposedPoints(prev => ({
+                                        ...prev,
+                                        [req.title]: (prev[req.title] || []).filter(p => p !== point)
+                                      }));
+                                    }
+                                  }}
+                                  className="w-5 h-5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                                />
+                              </div>
+                              <span className={`text-base leading-relaxed ${isSelected ? 'text-slate-900 font-medium' : 'text-slate-400 font-normal'}`}>
+                                {point}
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="h-px bg-slate-100 my-8" />
 
                 <section className="space-y-4">
-                  <h4 className="flex items-center gap-2 text-blue-600 font-black uppercase tracking-widest text-sm">
-                    <Edit size={18} /> 優化/更新項目 ({analysisSummary.updated.length})
-                  </h4>
-                  {analysisSummary.updated.length > 0 ? (
-                    <ul className="space-y-2">
-                      {analysisSummary.updated.map((item, i) => (
-                        <li key={i} className="p-4 bg-blue-50 border border-blue-100 rounded-2xl text-slate-700 leading-relaxed font-medium">
-                          {item}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : <p className="text-slate-400 italic px-4">本次無更新</p>}
-                </section>
-
-                <section className="space-y-4">
-                  <h4 className="flex items-center gap-2 text-slate-600 font-black uppercase tracking-widest text-sm">
-                    <Copy size={18} /> 被合併/去重項目 ({analysisSummary.merged.length})
-                  </h4>
-                  {analysisSummary.merged.length > 0 ? (
-                    <ul className="space-y-2">
-                      {analysisSummary.merged.map((item, i) => (
-                        <li key={i} className="p-4 bg-slate-50 border border-slate-200 rounded-2xl text-slate-500 leading-relaxed line-through decoration-slate-300">
-                          {item}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : <p className="text-slate-400 italic px-4">本次無合併</p>}
+                  <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest">異動摘要報告</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100">
+                      <div className="text-emerald-600 text-[10px] font-black uppercase tracking-widest mb-1">新增項目</div>
+                      <div className="text-2xl font-black text-emerald-700">{pendingAiResult.summary.added.length}</div>
+                    </div>
+                    <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100">
+                      <div className="text-blue-600 text-[10px] font-black uppercase tracking-widest mb-1">優化項目</div>
+                      <div className="text-2xl font-black text-blue-700">{pendingAiResult.summary.updated.length}</div>
+                    </div>
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                      <div className="text-slate-500 text-[10px] font-black uppercase tracking-widest mb-1">合併去重</div>
+                      <div className="text-2xl font-black text-slate-600">{pendingAiResult.summary.merged.length}</div>
+                    </div>
+                  </div>
                 </section>
               </div>
 
-              <div className="p-6 bg-slate-50 border-t border-slate-100 flex justify-end">
+              <div className="p-8 bg-slate-50 border-t border-slate-100 flex gap-4">
                 <button 
-                  onClick={() => setAnalysisSummary(null)}
-                  className="px-8 py-4 bg-blue-600 text-white font-black rounded-2xl shadow-lg shadow-blue-500/20 hover:bg-blue-700 transition-all uppercase tracking-widest text-sm"
+                  onClick={() => setPendingAiResult(null)}
+                  className="flex-1 py-4 bg-white border border-slate-200 text-slate-500 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-slate-100 transition-all"
                 >
-                  確認並關閉報告
+                  取消並不儲存
+                </button>
+                <button 
+                  onClick={handleConfirmAiAnalysis}
+                  disabled={isCleaning || Object.values(selectedProposedPoints).flat().length === 0}
+                  className="flex-[2] py-4 bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-blue-500/20 hover:bg-blue-700 disabled:opacity-50 transition-all flex items-center justify-center gap-3"
+                >
+                  {isCleaning ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+                  確認套用變更
                 </button>
               </div>
             </motion.div>
@@ -2260,98 +2319,6 @@ export default function App() {
           </div>
         )}
 
-        {showCopySpecsModal && (
-          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => !isCopyingSpecs && setShowCopySpecsModal(false)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-md" />
-            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
-               <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-blue-600 text-white">
-                 <div>
-                   <h3 className="text-xl font-black uppercase tracking-widest">複製空間規範</h3>
-                   <p className="text-xs font-medium opacity-80 mt-1">從「{selectedSpace}」複製選定的分類至其他空間</p>
-                 </div>
-                 <button onClick={() => setShowCopySpecsModal(false)} className="p-2 hover:bg-white/10 rounded-xl"><X size={20} /></button>
-               </div>
-               
-               <div className="flex-1 overflow-y-auto p-8 space-y-8 custom-scrollbar">
-                  {/* Select Categories */}
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest">第一步：選擇要複製的分類 ({copySpecsSelectedReqs.length})</h4>
-                      <button 
-                        onClick={() => setCopySpecsSelectedReqs(requirements.map(r => r.id))}
-                        className="text-[10px] text-blue-600 font-bold hover:underline"
-                      >
-                        全選
-                      </button>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {requirements.map((req) => (
-                        <label key={req.id} className={`flex items-center gap-3 p-4 rounded-2xl border-2 transition-all cursor-pointer ${copySpecsSelectedReqs.includes(req.id) ? 'border-blue-500 bg-blue-50' : 'border-slate-100 bg-slate-50 opacity-60 hover:opacity-100'}`}>
-                          <input 
-                            type="checkbox"
-                            className="w-5 h-5 rounded-lg border-slate-300 text-blue-600 focus:ring-blue-500"
-                            checked={copySpecsSelectedReqs.includes(req.id)}
-                            onChange={(e) => {
-                              if (e.target.checked) setCopySpecsSelectedReqs(prev => [...prev, req.id]);
-                              else setCopySpecsSelectedReqs(prev => prev.filter(id => id !== req.id));
-                            }}
-                          />
-                          <span className="text-xs font-black text-slate-700 uppercase">{req.title}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Select Target Spaces */}
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest">第二步：選擇目標空間 ({copySpecsSelectedTargets.length})</h4>
-                      <button 
-                        onClick={() => setCopySpecsSelectedTargets(customTopics.filter(t => t.name !== selectedSpace && (t.type === 'space' || !t.type)).map(t => t.name))}
-                        className="text-[10px] text-blue-600 font-bold hover:underline"
-                      >
-                        全選所有空間
-                      </button>
-                    </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                      {customTopics.filter(t => t.name !== selectedSpace && (t.type === 'space' || !t.type)).map((topic) => (
-                        <label key={topic.id} className={`flex items-center gap-2 p-3 rounded-xl border transition-all cursor-pointer ${copySpecsSelectedTargets.includes(topic.name) ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-100 bg-white text-slate-400 hover:text-slate-600'}`}>
-                          <input 
-                            type="checkbox"
-                            className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                            checked={copySpecsSelectedTargets.includes(topic.name)}
-                            onChange={(e) => {
-                              if (e.target.checked) setCopySpecsSelectedTargets(prev => [...prev, topic.name]);
-                              else setCopySpecsSelectedTargets(prev => prev.filter(name => name !== topic.name));
-                            }}
-                          />
-                          <span className="text-[10px] font-bold truncate">{topic.name}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-               </div>
-
-               <div className="p-8 bg-slate-50 border-t border-slate-100 flex gap-4">
-                 <button 
-                   onClick={() => setShowCopySpecsModal(false)}
-                   className="flex-1 py-4 bg-white border border-slate-200 text-slate-500 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-slate-100 transition-all"
-                 >
-                   取消
-                 </button>
-                 <button 
-                   onClick={handleBatchCopySpecs}
-                   disabled={isCopyingSpecs || copySpecsSelectedReqs.length === 0 || copySpecsSelectedTargets.length === 0}
-                   className="flex-[2] py-4 bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-blue-500/20 hover:bg-blue-700 disabled:opacity-50 transition-all flex items-center justify-center gap-3"
-                 >
-                   {isCopyingSpecs ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
-                   確認執行複製
-                 </button>
-               </div>
-            </motion.div>
-          </div>
-        )}
-
         {selectedLightboxPhoto && (
           <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
             <motion.div 
@@ -2400,7 +2367,8 @@ function NavItem({
   onEditCancel,
   onDelete,
   onCopy,
-  isSortable
+  isSortable,
+  user
 }: { 
   icon: React.ReactNode, 
   label: string, 
@@ -2415,7 +2383,8 @@ function NavItem({
   onEditCancel?: () => void,
   onDelete?: () => void,
   onCopy?: () => void,
-  isSortable?: boolean
+  isSortable?: boolean,
+  user?: User | null
 }) {
   if (isEditing) {
     return (
@@ -2448,7 +2417,7 @@ function NavItem({
             : 'text-slate-500 hover:bg-black/5 hover:text-slate-700'
         } ${collapsed && 'justify-center'}`}
       >
-        {isSortable && !collapsed && (
+        {isSortable && !collapsed && user && (
           <span className="text-slate-300 group-hover/nav:text-slate-500 cursor-grab active:cursor-grabbing">
             <GripVertical size={14} />
           </span>
