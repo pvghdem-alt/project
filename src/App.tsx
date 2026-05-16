@@ -1155,29 +1155,25 @@ export default function App() {
     try {
       const batch = writeBatch(db);
       
-      // Use selectedProposedPoints instead of raw result
+      // Delete all existing local requirements for this space to avoid duplication
+      // because the AI returns a completely merged and re-categorized list.
+      const existingReqsForSpace = requirements.filter(r => r.space === selectedSpace && !r.id.startsWith('default-') && r.id !== 'new');
+      for (const req of existingReqsForSpace) {
+        batch.delete(doc(db, 'requirements', req.id));
+      }
+      
+      // Add the newly categorized and merged requirements
       for (const title of Object.keys(selectedProposedPoints)) {
         const points = selectedProposedPoints[title];
         if (points.length === 0) continue;
 
-        const existing = requirements.find(r => 
-          r.title === title && r.space === selectedSpace
-        );
-
-        if (existing && !existing.id.startsWith('default-') && existing.id !== 'new') {
-          batch.update(doc(db, 'requirements', existing.id), {
-            points: points,
-            updatedAt: serverTimestamp()
-          });
-        } else {
-          const newRef = doc(collection(db, 'requirements'));
-          batch.set(newRef, { 
-            title: title, 
-            points: points, 
-            space: selectedSpace,
-            updatedAt: serverTimestamp() 
-          });
-        }
+        const newRef = doc(collection(db, 'requirements'));
+        batch.set(newRef, { 
+          title: title, 
+          points: points, 
+          space: selectedSpace,
+          updatedAt: serverTimestamp() 
+        });
       }
 
       pendingAiResult.sourceNotes.forEach(n => {
@@ -2179,18 +2175,41 @@ export default function App() {
 
                 <section className="space-y-4">
                   <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest">異動摘要報告</h4>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 gap-4">
                     <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100">
-                      <div className="text-emerald-600 text-[10px] font-black uppercase tracking-widest mb-1">新增項目</div>
-                      <div className="text-2xl font-black text-emerald-700">{pendingAiResult.summary.added.length}</div>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="text-emerald-700 text-xs font-black uppercase tracking-widest">新增與增補項目</div>
+                        <div className="text-emerald-700 font-bold bg-emerald-200/50 px-2.5 py-0.5 rounded-full text-xs">{pendingAiResult.summary.added.length} 筆</div>
+                      </div>
+                      <ul className="list-disc list-inside space-y-1.5">
+                         {pendingAiResult.summary.added.length > 0 ? pendingAiResult.summary.added.map((item: string, i: number) => (
+                           <li key={i} className="text-sm text-emerald-800">{item}</li>
+                         )) : <li className="text-sm text-emerald-600/60 list-none italic">無新增項目</li>}
+                      </ul>
                     </div>
+                    
                     <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100">
-                      <div className="text-blue-600 text-[10px] font-black uppercase tracking-widest mb-1">優化項目</div>
-                      <div className="text-2xl font-black text-blue-700">{pendingAiResult.summary.updated.length}</div>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="text-blue-700 text-xs font-black uppercase tracking-widest">語意優化與潤飾項目</div>
+                        <div className="text-blue-700 font-bold bg-blue-200/50 px-2.5 py-0.5 rounded-full text-xs">{pendingAiResult.summary.updated.length} 筆</div>
+                      </div>
+                      <ul className="list-disc list-inside space-y-1.5">
+                         {pendingAiResult.summary.updated.length > 0 ? pendingAiResult.summary.updated.map((item: string, i: number) => (
+                           <li key={i} className="text-sm text-blue-800">{item}</li>
+                         )) : <li className="text-sm text-blue-600/60 list-none italic">無變更項目</li>}
+                      </ul>
                     </div>
+
                     <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
-                      <div className="text-slate-500 text-[10px] font-black uppercase tracking-widest mb-1">合併去重</div>
-                      <div className="text-2xl font-black text-slate-600">{pendingAiResult.summary.merged.length}</div>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="text-slate-600 text-xs font-black uppercase tracking-widest">合併與去重項目</div>
+                        <div className="text-slate-600 font-bold bg-slate-200 px-2.5 py-0.5 rounded-full text-xs">{pendingAiResult.summary.merged.length} 筆</div>
+                      </div>
+                      <ul className="list-disc list-inside space-y-1.5">
+                         {pendingAiResult.summary.merged.length > 0 ? pendingAiResult.summary.merged.map((item: string, i: number) => (
+                           <li key={i} className="text-sm text-slate-700">{item}</li>
+                         )) : <li className="text-sm text-slate-400 list-none italic">無合併項目</li>}
+                      </ul>
                     </div>
                   </div>
                 </section>
