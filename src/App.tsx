@@ -1175,11 +1175,9 @@ export default function App() {
         }
       }
 
-      const noteUpdateBatch = writeBatch(db);
       pendingAiResult.sourceNotes.forEach(n => {
-        noteUpdateBatch.update(doc(db, 'notes', n.id), { status: 'confirmed', updatedAt: serverTimestamp() });
+        batch.update(doc(db, 'notes', n.id), { status: 'confirmed', updatedAt: serverTimestamp() });
       });
-      await noteUpdateBatch.commit();
       await batch.commit();
 
       setPendingAiResult(null);
@@ -1263,7 +1261,7 @@ export default function App() {
                  collapsed={!sidebarOpen}
                  onDelete={user ? () => handleDeleteFloor(map.id, map.name) : undefined}
                  user={user}
-                 onDoubleClick={() => { setEditingFloorId(map.id); setFloorEditName(map.name); }}
+                 onDoubleClick={user ? () => { setEditingFloorId(map.id); setFloorEditName(map.name); } : undefined}
                  isEditing={editingFloorId === map.id}
                  editValue={floorEditName}
                  onEditChange={setFloorEditName}
@@ -1410,7 +1408,6 @@ export default function App() {
                   onDelete={(user && (!topic.isDefault || user)) ? () => handleDeleteTopic(topic.id, topic.name) : undefined}
                   onCopy={user ? () => handleCopyTopic(topic) : undefined}
                   isSortable={true}
-                  user={user}
                 />
               </Reorder.Item>
             ))}

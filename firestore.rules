@@ -20,7 +20,8 @@ service cloud.firestore {
              data.content is string && data.content.size() <= 10000 &&
              data.timestamp is string && data.timestamp.size() <= 100 &&
              data.status in ['pending', 'confirmed'] &&
-             data.authorId is string;
+             data.authorId is string &&
+             (!('updatedAt' in data) || data.updatedAt is timestamp);
     }
 
     match /notes/{noteId} {
@@ -28,8 +29,8 @@ service cloud.firestore {
       allow get: if true;
       allow create: if isSignedIn() && isValidId(noteId) && isValidNote(incoming()) && incoming().createdAt == request.time;
       allow update: if isSignedIn() && isValidNote(incoming()) && (
-        incoming().diff(existing()).affectedKeys().hasOnly(['status']) ||
-        incoming().diff(existing()).affectedKeys().hasOnly(['content', 'status'])
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) ||
+        incoming().diff(existing()).affectedKeys().hasOnly(['content', 'status', 'updatedAt'])
       ) && incoming().createdAt == existing().createdAt;
       allow delete: if isSignedIn();
     }
