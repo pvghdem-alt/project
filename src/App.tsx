@@ -134,6 +134,7 @@ interface Note {
   content: string;
   timestamp: string;
   status: 'pending' | 'confirmed';
+  authorEmail?: string | null;
 }
 
 interface ChatMessage {
@@ -388,6 +389,7 @@ export default function App() {
       timestamp: new Date().toLocaleString(),
       createdAt: serverTimestamp(),
       status: 'pending',
+      authorEmail: user?.email || null,
       authorId: 'public'
     };
     try {
@@ -1334,6 +1336,7 @@ export default function App() {
                  active={selectedSpace === topic.name} 
                  onClick={() => setSelectedSpace(topic.name)}
                  collapsed={!sidebarOpen}
+                 badgeCount={notes.filter(n => n.space === topic.name && n.floor === activeFloor && n.status === 'pending').length}
                   onDoubleClick={(user && (!topic.isDefault || user)) ? () => { setEditingTopicId(topic.id); setTopicEditName(topic.name); } : undefined}
                  isEditing={editingTopicId === topic.id}
                  editValue={topicEditName}
@@ -2378,7 +2381,8 @@ function NavItem({
   onDelete,
   onCopy,
   isSortable,
-  user
+  user,
+  badgeCount
 }: { 
   icon: React.ReactNode, 
   label: string, 
@@ -2394,7 +2398,8 @@ function NavItem({
   onDelete?: () => void,
   onCopy?: () => void,
   isSortable?: boolean,
-  user?: User | null
+  user?: User | null,
+  badgeCount?: number
 }) {
   if (isEditing) {
     return (
@@ -2434,6 +2439,11 @@ function NavItem({
         )}
         <span className={`${active ? 'text-blue-500' : 'text-slate-500 group-hover:text-blue-600'} transition-colors shrink-0`}>{icon}</span>
         {!collapsed && <span className="truncate text-sm font-bold uppercase tracking-wider">{label}</span>}
+        {!collapsed && badgeCount && badgeCount > 0 ? (
+          <span className="ml-auto bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full flex items-center justify-center min-w-[1.25rem]">
+            {badgeCount}
+          </span>
+        ) : null}
       </button>
       {!collapsed && (
         <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1 opacity-0 group-hover/nav:opacity-100 transition-opacity">
@@ -2495,6 +2505,13 @@ function Hotspot({ label, color = "blue", onClick }: { label: string, color?: st
 function NoteItem({ note, showLabel = false, onToggleStatus, onDelete, onEdit }: { note: Note, showLabel?: boolean, onToggleStatus: (id: string, current: string) => void, onDelete: (id: string) => void, onEdit: (note: Note) => void }) {
   const isConfirmed = note.status === 'confirmed';
   
+  const getAuthorDisplay = (email: string | undefined | null) => {
+    if (!email) return '工程承辦人';
+    if (email === 'user@ptvgh.gov.tw') return '護理部';
+    if (email === 'jason2134@gmail.com') return '工程承辦人';
+    return email.split('@')[0];
+  };
+
   return (
     <motion.div 
       initial={{ opacity: 0, y: 5 }}
@@ -2503,6 +2520,7 @@ function NoteItem({ note, showLabel = false, onToggleStatus, onDelete, onEdit }:
     >
       <div className="flex justify-between items-start mb-1">
         <div className="flex items-center gap-2">
+          <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded font-black tracking-widest">{getAuthorDisplay(note.authorEmail)}</span>
           <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{note.timestamp.split(' ')[1] || note.timestamp}</span>
           <span className={`text-[9px] font-black px-1.5 py-0.5 rounded uppercase tracking-tighter shadow-sm ${
             isConfirmed ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'
