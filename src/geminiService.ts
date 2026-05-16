@@ -15,7 +15,7 @@ export function setCustomApiKey(key: string) {
   console.log("Custom API Key stored and initialized.");
 }
 
-const DEFAULT_MODEL = "gemini-1.5-flash"; // Use compatible model alias
+const DEFAULT_MODEL = "gemini-1.5-flash"; 
 
 const SYSTEM_PROMPT = `
 你是一位專業的醫療空間設計顧問，正在協助工程承辦人員與護理長討論「屏東榮總龍泉分院B棟3F、5F改建工程」。
@@ -43,17 +43,19 @@ async function callGeminiApi(options: {
   model?: string;
   responseMimeType?: string;
 }) {
-  // If we have a custom API key and we are likely on a static host (or proxy failed before)
-  // we try direct client call first to support GitHub Pages
   if (customApiKey && genAI) {
     try {
       const modelName = options.model || DEFAULT_MODEL;
-      const model = genAI.getGenerativeModel({ 
-        model: modelName,
-        systemInstruction: options.systemInstruction 
-      });
+      // Force v1 API for better compatibility with standard API keys
+      const model = genAI.getGenerativeModel(
+        { model: modelName },
+        { apiVersion: "v1" }
+      );
 
       let result;
+      // Incorporate system instruction into the prompt if provided
+      const systemContext = options.systemInstruction ? `系統提示：${options.systemInstruction}\n\n` : "";
+      
       if (options.contents) {
         result = await model.generateContent({
           contents: options.contents,
@@ -62,14 +64,13 @@ async function callGeminiApi(options: {
           }
         });
       } else {
-        result = await model.generateContent(options.query || "");
+        result = await model.generateContent(systemContext + (options.query || ""));
       }
 
       const response = await result.response;
       return response.text();
     } catch (clientError: any) {
       console.warn("Client-side Gemini call failed, falling back to proxy:", clientError);
-      // If client call fails (e.g. invalid key), we still try the proxy as a last resort
     }
   }
 
