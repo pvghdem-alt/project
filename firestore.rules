@@ -15,7 +15,6 @@ service cloud.firestore {
     // DiscussionNote Validation
     function isValidNote(data) {
       return data.keys().hasAll(['floor', 'space', 'content', 'timestamp', 'createdAt', 'status', 'authorId']) &&
-             data.keys().size() == 7 &&
              data.floor is string && data.floor.size() <= 128 &&
              data.space is string && data.space.size() <= 200 &&
              data.content is string && data.content.size() <= 10000 &&
@@ -37,10 +36,8 @@ service cloud.firestore {
 
     // CustomTopic Validation
     function isValidTopic(data) {
-      return data.keys().hasAll(['name', 'createdAt', 'creatorId', 'floorId', 'order', 'isDefault', 'type']) &&
-             data.keys().size() == 7 &&
+      return data.keys().hasAll(['name', 'createdAt', 'creatorId', 'floorId', 'order', 'isDefault']) &&
              data.name is string && data.name.size() <= 100 &&
-             data.type in ['space', 'trade'] &&
              data.creatorId is string &&
              data.floorId is string &&
              data.order is number &&
@@ -49,7 +46,9 @@ service cloud.firestore {
 
     match /topics/{topicId} {
       allow read, list: if true;
-      allow create: if isSignedIn() && isValidId(topicId) && isValidTopic(incoming()) && incoming().createdAt == request.time;
+      allow create: if isSignedIn() && isValidId(topicId) && isValidTopic(incoming()) && 
+                      incoming().get('type', 'space') in ['space', 'trade'] &&
+                      incoming().createdAt == request.time;
       allow update: if isSignedIn() && isValidTopic(incoming()) && 
                     (
                       incoming().diff(existing()).affectedKeys().hasOnly(['name']) ||
@@ -58,7 +57,6 @@ service cloud.firestore {
                     ) &&
                     incoming().createdAt == existing().createdAt &&
                     incoming().creatorId == existing().creatorId &&
-                    (existing().get('type', 'space') == incoming().type) &&
                     incoming().isDefault == existing().isDefault;
       allow delete: if isSignedIn();
     }

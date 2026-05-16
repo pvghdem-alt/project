@@ -231,6 +231,7 @@ export default function App() {
 
   const [spacePhotos, setSpacePhotos] = useState<SpacePhoto[]>([]);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [selectedLightboxPhoto, setSelectedLightboxPhoto] = useState<string | null>(null);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -764,8 +765,25 @@ export default function App() {
     }
   };
 
-  const handlePhotoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files;
+  const handlePhotoUpload = async (event: React.ChangeEvent<HTMLInputElement> | ClipboardEvent) => {
+    let files: FileList | File[] | null = null;
+    
+    if (event instanceof ClipboardEvent) {
+      const items = event.clipboardData?.items;
+      if (!items) return;
+      const imageFiles: File[] = [];
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf('image') !== -1) {
+          const file = items[i].getAsFile();
+          if (file) imageFiles.push(file);
+        }
+      }
+      if (imageFiles.length === 0) return;
+      files = imageFiles;
+    } else {
+      files = event.target.files;
+    }
+
     if (!files || files.length === 0 || !selectedSpace) return;
     
     setIsUploadingPhoto(true);
@@ -806,9 +824,24 @@ export default function App() {
       setTimeout(() => setNotification(null), 3000);
     } finally {
       setIsUploadingPhoto(false);
-      if (photoInputRef.current) photoInputRef.current.value = '';
+      if (!(event instanceof ClipboardEvent) && photoInputRef.current) {
+        photoInputRef.current.value = '';
+      }
     }
   };
+
+  useEffect(() => {
+    const handleGlobalPaste = (e: ClipboardEvent) => {
+      // Only handle paste if we have a selected space and not currently focusing a textarea/input
+      const target = e.target as HTMLElement;
+      const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';
+      if (selectedSpace && !isInput) {
+        handlePhotoUpload(e);
+      }
+    };
+    window.addEventListener('paste', handleGlobalPaste);
+    return () => window.removeEventListener('paste', handleGlobalPaste);
+  }, [selectedSpace, user]);
 
   const handleDeletePhoto = async (id: string) => {
     if (!user) return;
@@ -1023,6 +1056,7 @@ export default function App() {
   };
 
   const handleReorderTopics = async (newOrder: Topic[]) => {
+    if (!user) return;
     setCustomTopics(newOrder); // Optimistic update
     try {
       const batch = writeBatch(db);
@@ -1238,13 +1272,13 @@ export default function App() {
                  active={selectedSpace === topic.name} 
                  onClick={() => setSelectedSpace(topic.name)}
                  collapsed={!sidebarOpen}
-                 onDoubleClick={() => !topic.isDefault && (setEditingTopicId(topic.id), setTopicEditName(topic.name))}
+                 onDoubleClick={() => (!topic.isDefault || user) && (setEditingTopicId(topic.id), setTopicEditName(topic.name))}
                  isEditing={editingTopicId === topic.id}
                  editValue={topicEditName}
                  onEditChange={setTopicEditName}
                  onEditSubmit={() => handleUpdateTopic(topic.id)}
                  onEditCancel={() => setEditingTopicId(null)}
-                 onDelete={!topic.isDefault ? () => handleDeleteTopic(topic.id, topic.name) : undefined}
+                 onDelete={(!topic.isDefault || user) ? () => handleDeleteTopic(topic.id, topic.name) : undefined}
                  onCopy={() => handleCopyTopic(topic)}
                  isSortable={true}
                />
@@ -1303,13 +1337,13 @@ export default function App() {
                   active={selectedSpace === topic.name} 
                   onClick={() => setSelectedSpace(topic.name)}
                   collapsed={!sidebarOpen}
-                  onDoubleClick={() => !topic.isDefault && (setEditingTopicId(topic.id), setTopicEditName(topic.name))}
+                  onDoubleClick={() => (!topic.isDefault || user) && (setEditingTopicId(topic.id), setTopicEditName(topic.name))}
                   isEditing={editingTopicId === topic.id}
                   editValue={topicEditName}
                   onEditChange={setTopicEditName}
                   onEditSubmit={() => handleUpdateTopic(topic.id)}
                   onEditCancel={() => setEditingTopicId(null)}
-                  onDelete={!topic.isDefault ? () => handleDeleteTopic(topic.id, topic.name) : undefined}
+                  onDelete={(!topic.isDefault || user) ? () => handleDeleteTopic(topic.id, topic.name) : undefined}
                   onCopy={() => handleCopyTopic(topic)}
                   isSortable={true}
                 />
@@ -1520,7 +1554,11 @@ export default function App() {
                           {spacePhotos.length > 0 ? (
                             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
                               {spacePhotos.map((photo) => (
-                                <div key={photo.id} className="relative group aspect-square rounded-2xl overflow-hidden border border-slate-200 bg-slate-50 shadow-sm transition-all hover:shadow-lg hover:scale-[1.02]">
+                                <div 
+                                  key={photo.id} 
+                                  onClick={() => setSelectedLightboxPhoto(photo.url)}
+                                  className="relative group aspect-square rounded-2xl overflow-hidden border border-slate-200 bg-slate-50 shadow-sm transition-all hover:shadow-lg hover:scale-[1.02] cursor-zoom-in"
+                                >
                                   <img 
                                     src={photo.url} 
                                     alt="Space view" 
@@ -1529,7 +1567,7 @@ export default function App() {
                                   />
                                   {user && (
                                     <button 
-                                      onClick={() => handleDeletePhoto(photo.id)}
+                                      onClick={(e) => { e.stopPropagation(); handleDeletePhoto(photo.id); }}
                                       className="absolute top-2 right-2 p-1.5 bg-red-600 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity shadow-lg hover:bg-red-700"
                                     >
                                       <Trash2 size={12} />
@@ -2033,6 +2071,36 @@ export default function App() {
                >
                  暫不登入 (僅限檢視)
                </button>
+            </motion.div>
+          </div>
+        )}
+
+        {selectedLightboxPhoto && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }} 
+              animate={{ opacity: 1 }} 
+              exit={{ opacity: 0 }} 
+              onClick={() => setSelectedLightboxPhoto(null)} 
+              className="absolute inset-0 bg-slate-950/90 backdrop-blur-sm" 
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }} 
+              animate={{ opacity: 1, scale: 1 }} 
+              exit={{ opacity: 0, scale: 0.9 }} 
+              className="relative max-w-5xl max-h-[90vh] w-full"
+            >
+              <button 
+                onClick={() => setSelectedLightboxPhoto(null)}
+                className="absolute -top-12 right-0 p-2 text-white/70 hover:text-white transition-colors bg-white/10 rounded-full hover:bg-white/20"
+              >
+                <X size={24} />
+              </button>
+              <img 
+                src={selectedLightboxPhoto} 
+                alt="Enlarged space view" 
+                className="w-full h-full object-contain rounded-2xl shadow-2xl"
+              />
             </motion.div>
           </div>
         )}
