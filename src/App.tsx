@@ -223,7 +223,7 @@ export default function App() {
   const [floorEditName, setFloorEditName] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string, name: string, type: 'topic' | 'floor' | 'requirement' } | null>(null);
   const [analysisSummary, setAnalysisSummary] = useState<{ added: string[], merged: string[], updated: string[] } | null>(null);
-  const [activeMainTab, setActiveMainTab] = useState<'discussion' | 'map'>('discussion');
+  const [activeMainTab, setActiveMainTab] = useState<'discussion' | 'photos' | 'map'>('discussion');
   const [rightSidebarWidth, setRightSidebarWidth] = useState(400);
   const [expandedReqIds, setExpandedReqIds] = useState<string[]>([]);
   const [collapsedChatIndices, setCollapsedChatIndices] = useState<number[]>([]);
@@ -232,6 +232,10 @@ export default function App() {
   const [spacePhotos, setSpacePhotos] = useState<SpacePhoto[]>([]);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [selectedLightboxPhoto, setSelectedLightboxPhoto] = useState<string | null>(null);
+  const [showCopySpecsModal, setShowCopySpecsModal] = useState(false);
+  const [copySpecsSelectedReqs, setCopySpecsSelectedReqs] = useState<string[]>([]);
+  const [copySpecsSelectedTargets, setCopySpecsSelectedTargets] = useState<string[]>([]);
+  const [isCopyingSpecs, setIsCopyingSpecs] = useState(false);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -966,6 +970,45 @@ export default function App() {
     setDeleteConfirm({ id, name, type: 'topic' });
   };
 
+  const handleBatchCopySpecs = async () => {
+    if (copySpecsSelectedReqs.length === 0 || copySpecsSelectedTargets.length === 0) return;
+    
+    setIsCopyingSpecs(true);
+    setNotification({ message: '正在複製規範...', type: 'ai' });
+
+    try {
+      const batch = writeBatch(db);
+      
+      // Get the source requirements
+      const selectedReqsData = requirements.filter(r => copySpecsSelectedReqs.includes(r.id));
+      
+      for (const targetSpace of copySpecsSelectedTargets) {
+        for (const req of selectedReqsData) {
+          const newId = `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+          const ref = doc(db, 'requirements', newId);
+          batch.set(ref, {
+            space: targetSpace,
+            title: req.title,
+            points: req.points,
+            createdAt: serverTimestamp()
+          });
+        }
+      }
+
+      await batch.commit();
+      setNotification({ message: `成功複製至 ${copySpecsSelectedTargets.length} 個空間`, type: 'success' });
+      setShowCopySpecsModal(false);
+      setCopySpecsSelectedReqs([]);
+      setCopySpecsSelectedTargets([]);
+    } catch (err) {
+      console.error(err);
+      setNotification({ message: '複製失敗', type: 'error' });
+    } finally {
+      setIsCopyingSpecs(false);
+      setTimeout(() => setNotification(null), 3000);
+    }
+  };
+
   const performDeleteTopic = async (id: string, name: string) => {
     try {
       if (selectedSpace === name) setSelectedSpace(null);
@@ -1446,6 +1489,17 @@ export default function App() {
                     討論紀錄
                   </button>
                   <button 
+                    onClick={() => setActiveMainTab('photos')}
+                    className={`flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold transition-all duration-300 ${
+                      activeMainTab === 'photos' 
+                        ? 'bg-white text-blue-600 shadow-lg' 
+                        : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    <ImageIcon size={16} />
+                    空間現況/示意照片
+                  </button>
+                  <button 
                     onClick={() => setActiveMainTab('map')}
                     className={`flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold transition-all duration-300 ${
                       activeMainTab === 'map' 
@@ -1512,136 +1566,165 @@ export default function App() {
                       </div>
                     ) : (
                       <div className="h-full flex flex-col p-6 lg:p-8 space-y-8">
+                        {/* Space Header */}
                         <div className="flex items-center justify-between pb-4 border-b border-slate-100 shrink-0">
                           <div>
-                            <h4 className="text-xs font-black text-blue-600 uppercase tracking-widest mb-1">空間細部規範</h4>
+                            <h4 className="text-xs font-black text-blue-600 uppercase tracking-widest mb-1">
+                              {activeMainTab === 'photos' ? '空間視覺參考' : '空間細部規範'}
+                            </h4>
                             <h3 className="text-3xl font-black text-slate-900 tracking-tight">{selectedSpace}</h3>
                           </div>
-                          <button 
-                            onClick={() => setSelectedSpace(null)} 
-                            className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-xl transition-colors lg:hidden"
-                          >
-                            <X size={20} />
-                          </button>
-                        </div>
-
-                        {/* Space Photos Section */}
-                        <div className="space-y-4 shrink-0">
-                          <div className="flex items-center justify-between">
-                            <h4 className="text-base font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
-                              <ImageIcon size={18} className="text-blue-500" /> 空間現況/示意照片
-                            </h4>
-                            {user && (
+                          <div className="flex items-center gap-2">
+                            {activeMainTab === 'discussion' && user && (
                               <button 
-                                onClick={() => photoInputRef.current?.click()}
-                                disabled={isUploadingPhoto}
-                                className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-slate-800 transition-all shadow-md active:scale-95 disabled:opacity-50"
+                                onClick={() => {
+                                  // Pre-select all requirements of the current space
+                                  const currentReqs = requirements.filter(k => 
+                                    (k.space === selectedSpace) ||
+                                    (!k.space && (k.title === selectedSpace || k.title.includes(selectedSpace || '')))
+                                  );
+                                  setCopySpecsSelectedReqs(currentReqs.map(r => r.id));
+                                  setCopySpecsSelectedTargets([]);
+                                  setShowCopySpecsModal(true);
+                                }}
+                                className="flex items-center gap-2 px-3 py-1.5 text-blue-600 hover:bg-blue-50 border border-blue-200 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all"
                               >
-                                {isUploadingPhoto ? <Loader2 size={14} className="animate-spin" /> : <Camera size={14} />}
-                                上傳照片
+                                <Copy size={12} />
+                                複製規範至其他空間
                               </button>
                             )}
-                            <input 
-                              type="file"
-                              ref={photoInputRef}
-                              hidden
-                              multiple
-                              accept="image/*"
-                              onChange={handlePhotoUpload}
-                            />
+                            <button 
+                              onClick={() => setSelectedSpace(null)} 
+                              className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-xl transition-colors lg:hidden"
+                            >
+                              <X size={20} />
+                            </button>
                           </div>
-
-                          {spacePhotos.length > 0 ? (
-                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-                              {spacePhotos.map((photo) => (
-                                <div 
-                                  key={photo.id} 
-                                  onClick={() => setSelectedLightboxPhoto(photo.url)}
-                                  className="relative group aspect-square rounded-2xl overflow-hidden border border-slate-200 bg-slate-50 shadow-sm transition-all hover:shadow-lg hover:scale-[1.02] cursor-zoom-in"
-                                >
-                                  <img 
-                                    src={photo.url} 
-                                    alt="Space view" 
-                                    className="w-full h-full object-cover"
-                                    loading="lazy"
-                                  />
-                                  {user && (
-                                    <button 
-                                      onClick={(e) => { e.stopPropagation(); handleDeletePhoto(photo.id); }}
-                                      className="absolute top-2 right-2 p-1.5 bg-red-600 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity shadow-lg hover:bg-red-700"
-                                    >
-                                      <Trash2 size={12} />
-                                    </button>
-                                  )}
-                                  <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/60 to-transparent p-2 text-[10px] text-white opacity-0 group-hover:opacity-100 transition-opacity">
-                                    {new Date(photo.createdAt?.seconds * 1000).toLocaleDateString()}
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <div className="flex flex-col items-center justify-center p-10 border-2 border-dashed border-slate-200 rounded-3xl bg-slate-50/50">
-                              <ImageIcon size={32} className="text-slate-300 mb-2" />
-                              <p className="text-sm text-slate-400 font-medium font-sans">尚無空間照片</p>
-                            </div>
-                          )}
                         </div>
 
-                        <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-2">
-                          <div className="bg-blue-600/5 border border-blue-500/10 rounded-2xl p-6">
-                            <div className="flex justify-between items-center mb-6 sticky top-0 bg-transparent backdrop-blur-sm pb-2">
-                              <h4 className="text-base font-black text-blue-600 uppercase tracking-widest flex items-center gap-2">
-                                <ShieldAlert size={18} /> 設計規範明細
+                        {activeMainTab === 'photos' ? (
+                          /* Space Photos Section */
+                          <div className="flex-1 min-h-0 flex flex-col space-y-4">
+                            <div className="flex items-center justify-between shrink-0">
+                              <h4 className="text-base font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
+                                <ImageIcon size={18} className="text-blue-500" /> 空間現況/示意照片
                               </h4>
+                              {user && (
+                                <button 
+                                  onClick={() => photoInputRef.current?.click()}
+                                  disabled={isUploadingPhoto}
+                                  className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-slate-800 transition-all shadow-md active:scale-95 disabled:opacity-50"
+                                >
+                                  {isUploadingPhoto ? <Loader2 size={14} className="animate-spin" /> : <Camera size={14} />}
+                                  上傳照片
+                                </button>
+                              )}
+                              <input 
+                                type="file"
+                                ref={photoInputRef}
+                                hidden
+                                multiple
+                                accept="image/*"
+                                onChange={handlePhotoUpload}
+                              />
                             </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                              {(() => {
-                                const filtered = requirements.filter(k => 
-                                  (k.space === selectedSpace) ||
-                                  (!k.space && (k.title === selectedSpace || k.title.includes(selectedSpace || '')))
-                                );
 
-                                if (filtered.length === 0) return <p className="text-slate-500 text-sm italic col-span-full text-center py-12">無特定規範，請點擊右側輸入討論細節</p>;
-
-                                return filtered.filter(k => k.points.length > 0).map((cat) => (
-                                  <div key={cat.id} className="space-y-4 p-5 bg-white/60 rounded-2xl border border-blue-500/10 group shadow-sm hover:shadow-md transition-all">
-                                    <div className="flex justify-between items-center">
-                                      <h5 className="text-lg font-black text-blue-700 border-l-4 border-blue-500 pl-4 py-1 uppercase tracking-tight">
-                                        {cat.title}
-                                      </h5>
+                            <div className="flex-1 overflow-y-auto custom-scrollbar pr-2">
+                              {spacePhotos.length > 0 ? (
+                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 py-2">
+                                  {spacePhotos.map((photo) => (
+                                    <div 
+                                      key={photo.id} 
+                                      onClick={() => setSelectedLightboxPhoto(photo.url)}
+                                      className="relative group aspect-square rounded-2xl overflow-hidden border border-slate-200 bg-slate-50 shadow-sm transition-all hover:shadow-lg hover:scale-[1.02] cursor-zoom-in"
+                                    >
+                                      <img 
+                                        src={photo.url} 
+                                        alt="Space view" 
+                                        className="w-full h-full object-cover"
+                                        loading="lazy"
+                                      />
                                       {user && (
-                                        <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                          <button 
-                                            onClick={() => setEditingReq({ id: cat.id, title: cat.title, points: cat.points })}
-                                            className="p-2 hover:bg-blue-100 text-blue-600 rounded-xl"
-                                          >
-                                            <Edit size={16} />
-                                          </button>
-                                          {!cat.id.startsWith('default-') && (
-                                            <button 
-                                              onClick={() => setDeleteConfirm({ id: cat.id, name: cat.title, type: 'requirement' })}
-                                              className="p-2 hover:bg-red-100 text-red-600 rounded-xl"
-                                            >
-                                              <Trash2 size={16} />
-                                            </button>
-                                          )}
-                                        </div>
+                                        <button 
+                                          onClick={(e) => { e.stopPropagation(); handleDeletePhoto(photo.id); }}
+                                          className="absolute top-2 right-2 p-1.5 bg-red-600 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity shadow-lg hover:bg-red-700"
+                                        >
+                                          <Trash2 size={12} />
+                                        </button>
                                       )}
+                                      <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/60 to-transparent p-2 text-[10px] text-white opacity-0 group-hover:opacity-100 transition-opacity">
+                                        {new Date(photo.createdAt?.seconds * 1000).toLocaleDateString()}
+                                      </div>
                                     </div>
-                                    <ul className="space-y-3 pl-1">
-                                      {cat.points.map((p, i) => (
-                                        <li key={i} className="flex gap-3 text-base text-slate-700 leading-relaxed group/item">
-                                          <div className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0 mt-2.5 transition-transform group-hover/item:scale-150" />
-                                          <p className="flex-1 font-medium">{p}</p>
-                                        </li>
-                                      ))}
-                                    </ul>
-                                  </div>
-                                ));
-                              })()}
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="flex flex-col items-center justify-center p-20 border-2 border-dashed border-slate-200 rounded-3xl bg-slate-50/50">
+                                  <ImageIcon size={48} className="text-slate-300 mb-4" />
+                                  <p className="text-lg text-slate-400 font-bold font-sans">尚無空間照片</p>
+                                  <p className="text-xs text-slate-400 mt-1">點擊上方按鈕開始建立空間現況紀錄</p>
+                                </div>
+                              )}
                             </div>
                           </div>
-                        </div>
+                        ) : (
+                          /* Engineering Specs Section */
+                          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-2">
+                            <div className="bg-blue-600/5 border border-blue-500/10 rounded-2xl p-6">
+                              <div className="flex justify-between items-center mb-6 sticky top-0 bg-transparent backdrop-blur-sm pb-2 z-10">
+                                <h4 className="text-base font-black text-blue-600 uppercase tracking-widest flex items-center gap-2">
+                                  <ShieldAlert size={18} /> 設計規範明細
+                                </h4>
+                              </div>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                {(() => {
+                                  const filtered = requirements.filter(k => 
+                                    (k.space === selectedSpace) ||
+                                    (!k.space && (k.title === selectedSpace || k.title.includes(selectedSpace || '')))
+                                  );
+
+                                  if (filtered.length === 0) return <p className="text-slate-500 text-sm italic col-span-full text-center py-12">無特定規範，請點擊右側輸入討論細節</p>;
+
+                                  return filtered.filter(k => k.points.length > 0).map((cat) => (
+                                    <div key={cat.id} className="space-y-4 p-5 bg-white/60 rounded-2xl border border-blue-500/10 group shadow-sm hover:shadow-md transition-all">
+                                      <div className="flex justify-between items-center">
+                                        <h5 className="text-lg font-black text-blue-700 border-l-4 border-blue-500 pl-4 py-1 uppercase tracking-tight">
+                                          {cat.title}
+                                        </h5>
+                                        {user && (
+                                          <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <button 
+                                              onClick={() => setEditingReq({ id: cat.id, title: cat.title, points: cat.points })}
+                                              className="p-2 hover:bg-blue-100 text-blue-600 rounded-xl"
+                                            >
+                                              <Edit size={16} />
+                                            </button>
+                                            {!cat.id.startsWith('default-') && (
+                                              <button 
+                                                onClick={() => setDeleteConfirm({ id: cat.id, name: cat.title, type: 'requirement' })}
+                                                className="p-2 hover:bg-red-100 text-red-600 rounded-xl"
+                                              >
+                                                <Trash2 size={16} />
+                                              </button>
+                                            )}
+                                          </div>
+                                        )}
+                                      </div>
+                                      <ul className="space-y-3 pl-1">
+                                        {cat.points.map((p, i) => (
+                                          <li key={i} className="flex gap-3 text-base text-slate-700 leading-relaxed group/item">
+                                            <div className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0 mt-2.5 transition-transform group-hover/item:scale-150" />
+                                            <p className="flex-1 font-medium">{p}</p>
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    </div>
+                                  ));
+                                })()}
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1709,6 +1792,108 @@ export default function App() {
 
       {/* Modals */}
       <AnimatePresence>
+        {showCopySpecsModal && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => !isCopyingSpecs && setShowCopySpecsModal(false)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-md" />
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+               <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-blue-600 text-white">
+                 <div>
+                   <h3 className="text-xl font-black uppercase tracking-widest">複製空間規範</h3>
+                   <p className="text-xs font-medium opacity-80 mt-1">從「{selectedSpace}」複製選定的分類至其他空間</p>
+                 </div>
+                 <button onClick={() => setShowCopySpecsModal(false)} className="p-2 hover:bg-white/10 rounded-xl"><X size={20} /></button>
+               </div>
+               
+               <div className="flex-1 overflow-y-auto p-8 space-y-8 custom-scrollbar">
+                  {/* Select Categories */}
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest">第一步：選擇要複製的分類 ({copySpecsSelectedReqs.length})</h4>
+                      <button 
+                        onClick={() => {
+                          const currentReqs = requirements.filter(k => 
+                            (k.space === selectedSpace) ||
+                            (!k.space && (k.title === selectedSpace || k.title.includes(selectedSpace || '')))
+                          );
+                          setCopySpecsSelectedReqs(currentReqs.map(r => r.id));
+                        }}
+                        className="text-[10px] text-blue-600 font-bold hover:underline"
+                      >
+                        全選
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {requirements.filter(k => 
+                        (k.space === selectedSpace) ||
+                        (!k.space && (k.title === selectedSpace || k.title.includes(selectedSpace || '')))
+                      ).map((req) => (
+                        <label key={req.id} className={`flex items-center gap-3 p-4 rounded-2xl border-2 transition-all cursor-pointer ${copySpecsSelectedReqs.includes(req.id) ? 'border-blue-500 bg-blue-50' : 'border-slate-100 bg-slate-50 opacity-60 hover:opacity-100'}`}>
+                          <input 
+                            type="checkbox"
+                            className="w-5 h-5 rounded-lg border-slate-300 text-blue-600 focus:ring-blue-500"
+                            checked={copySpecsSelectedReqs.includes(req.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) setCopySpecsSelectedReqs(prev => [...prev, req.id]);
+                              else setCopySpecsSelectedReqs(prev => prev.filter(id => id !== req.id));
+                            }}
+                          />
+                          <span className="text-xs font-black text-slate-700 uppercase">{req.title}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Select Target Spaces */}
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest">第二步：選擇目標空間 ({copySpecsSelectedTargets.length})</h4>
+                      <button 
+                        onClick={() => setCopySpecsSelectedTargets(customTopics.filter(t => t.name !== selectedSpace && (t.type === 'space' || !t.type)).map(t => t.name))}
+                        className="text-[10px] text-blue-600 font-bold hover:underline"
+                      >
+                        全選所有空間
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                       {/* Maps/Floors also as potential targets? No, user said spaces */}
+                      {customTopics.filter(t => t.name !== selectedSpace && (t.type === 'space' || !t.type)).map((topic) => (
+                        <label key={topic.id} className={`flex items-center gap-2 p-3 rounded-xl border transition-all cursor-pointer ${copySpecsSelectedTargets.includes(topic.name) ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-100 bg-white text-slate-400 hover:text-slate-600'}`}>
+                          <input 
+                            type="checkbox"
+                            className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                            checked={copySpecsSelectedTargets.includes(topic.name)}
+                            onChange={(e) => {
+                              if (e.target.checked) setCopySpecsSelectedTargets(prev => [...prev, topic.name]);
+                              else setCopySpecsSelectedTargets(prev => prev.filter(name => name !== topic.name));
+                            }}
+                          />
+                          <span className="text-[10px] font-bold truncate">{topic.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+               </div>
+
+               <div className="p-8 bg-slate-50 border-t border-slate-100 flex gap-4">
+                 <button 
+                   onClick={() => setShowCopySpecsModal(false)}
+                   className="flex-1 py-4 bg-white border border-slate-200 text-slate-500 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-slate-100 transition-all"
+                 >
+                   取消
+                 </button>
+                 <button 
+                   onClick={handleBatchCopySpecs}
+                   disabled={isCopyingSpecs || copySpecsSelectedReqs.length === 0 || copySpecsSelectedTargets.length === 0}
+                   className="flex-[2] py-4 bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-blue-500/20 hover:bg-blue-700 disabled:opacity-50 transition-all flex items-center justify-center gap-3"
+                 >
+                   {isCopyingSpecs ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+                   確認執行複製
+                 </button>
+               </div>
+            </motion.div>
+          </div>
+        )}
+
         {editingReq && (
           <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setEditingReq(null)} className="absolute inset-0 bg-[#F2F2F7]/80 backdrop-blur-sm" />
@@ -2071,6 +2256,98 @@ export default function App() {
                >
                  暫不登入 (僅限檢視)
                </button>
+            </motion.div>
+          </div>
+        )}
+
+        {showCopySpecsModal && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => !isCopyingSpecs && setShowCopySpecsModal(false)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-md" />
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+               <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-blue-600 text-white">
+                 <div>
+                   <h3 className="text-xl font-black uppercase tracking-widest">複製空間規範</h3>
+                   <p className="text-xs font-medium opacity-80 mt-1">從「{selectedSpace}」複製選定的分類至其他空間</p>
+                 </div>
+                 <button onClick={() => setShowCopySpecsModal(false)} className="p-2 hover:bg-white/10 rounded-xl"><X size={20} /></button>
+               </div>
+               
+               <div className="flex-1 overflow-y-auto p-8 space-y-8 custom-scrollbar">
+                  {/* Select Categories */}
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest">第一步：選擇要複製的分類 ({copySpecsSelectedReqs.length})</h4>
+                      <button 
+                        onClick={() => setCopySpecsSelectedReqs(requirements.map(r => r.id))}
+                        className="text-[10px] text-blue-600 font-bold hover:underline"
+                      >
+                        全選
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {requirements.map((req) => (
+                        <label key={req.id} className={`flex items-center gap-3 p-4 rounded-2xl border-2 transition-all cursor-pointer ${copySpecsSelectedReqs.includes(req.id) ? 'border-blue-500 bg-blue-50' : 'border-slate-100 bg-slate-50 opacity-60 hover:opacity-100'}`}>
+                          <input 
+                            type="checkbox"
+                            className="w-5 h-5 rounded-lg border-slate-300 text-blue-600 focus:ring-blue-500"
+                            checked={copySpecsSelectedReqs.includes(req.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) setCopySpecsSelectedReqs(prev => [...prev, req.id]);
+                              else setCopySpecsSelectedReqs(prev => prev.filter(id => id !== req.id));
+                            }}
+                          />
+                          <span className="text-xs font-black text-slate-700 uppercase">{req.title}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Select Target Spaces */}
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest">第二步：選擇目標空間 ({copySpecsSelectedTargets.length})</h4>
+                      <button 
+                        onClick={() => setCopySpecsSelectedTargets(customTopics.filter(t => t.name !== selectedSpace && (t.type === 'space' || !t.type)).map(t => t.name))}
+                        className="text-[10px] text-blue-600 font-bold hover:underline"
+                      >
+                        全選所有空間
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      {customTopics.filter(t => t.name !== selectedSpace && (t.type === 'space' || !t.type)).map((topic) => (
+                        <label key={topic.id} className={`flex items-center gap-2 p-3 rounded-xl border transition-all cursor-pointer ${copySpecsSelectedTargets.includes(topic.name) ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-100 bg-white text-slate-400 hover:text-slate-600'}`}>
+                          <input 
+                            type="checkbox"
+                            className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                            checked={copySpecsSelectedTargets.includes(topic.name)}
+                            onChange={(e) => {
+                              if (e.target.checked) setCopySpecsSelectedTargets(prev => [...prev, topic.name]);
+                              else setCopySpecsSelectedTargets(prev => prev.filter(name => name !== topic.name));
+                            }}
+                          />
+                          <span className="text-[10px] font-bold truncate">{topic.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+               </div>
+
+               <div className="p-8 bg-slate-50 border-t border-slate-100 flex gap-4">
+                 <button 
+                   onClick={() => setShowCopySpecsModal(false)}
+                   className="flex-1 py-4 bg-white border border-slate-200 text-slate-500 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-slate-100 transition-all"
+                 >
+                   取消
+                 </button>
+                 <button 
+                   onClick={handleBatchCopySpecs}
+                   disabled={isCopyingSpecs || copySpecsSelectedReqs.length === 0 || copySpecsSelectedTargets.length === 0}
+                   className="flex-[2] py-4 bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-blue-500/20 hover:bg-blue-700 disabled:opacity-50 transition-all flex items-center justify-center gap-3"
+                 >
+                   {isCopyingSpecs ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+                   確認執行複製
+                 </button>
+               </div>
             </motion.div>
           </div>
         )}

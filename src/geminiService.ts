@@ -1,56 +1,14 @@
-import { GoogleGenAI } from "@google/genai";
 import { DESIGN_SPECS } from "./constants";
 
-let ai: GoogleGenAI | null = null;
 let customApiKey: string | null = null;
 
 export function setCustomApiKey(key: string) {
   if (!key || key.trim() === "") {
     customApiKey = null;
-    ai = null;
     return;
   }
   customApiKey = key.trim();
-  try {
-    ai = new GoogleGenAI({ apiKey: customApiKey });
-    console.log("Custom API Key set and AI client initialized.");
-  } catch (e) {
-    console.error("Invalid API Key format:", e);
-    ai = null;
-  }
-}
-
-export function getAiClient() {
-  if (customApiKey) {
-    if (!ai) {
-      try {
-        console.log("Initializing Gemini AI with custom key...");
-        ai = new GoogleGenAI({ apiKey: customApiKey });
-      } catch (e) {
-        console.error("Failed to initialize Gemini AI with custom key:", e);
-        return null;
-      }
-    }
-    return ai;
-  }
-  
-  if (!ai) {
-    // Try process.env (mapped by Vite)
-    try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (apiKey && apiKey !== "undefined" && apiKey !== "") {
-        console.log("Initializing Gemini AI with system key...");
-        ai = new GoogleGenAI({ apiKey: apiKey });
-      } else {
-        console.warn("GEMINI_API_KEY is not available in environment.");
-        return null;
-      }
-    } catch (e) {
-      console.warn("Accessing process.env.GEMINI_API_KEY failed or it is not defined.", e);
-      return null;
-    }
-  }
-  return ai;
+  console.log("Custom API Key stored.");
 }
 
 const DEFAULT_MODEL = "gemini-2.0-flash";
@@ -74,59 +32,79 @@ ${JSON.stringify(DESIGN_SPECS.keyPoints, null, 2)}
 6. 回答請使用繁體中文。
 `;
 
-export async function askAiAssistant(query: string) {
+async function callGeminiApi(options: {
+  query?: string;
+  contents?: any[];
+  systemInstruction?: string;
+  model?: string;
+  responseMimeType?: string;
+}) {
   let retries = 0;
-  const maxRetries = 2;
+  const maxRetries = 3;
   
   while (retries <= maxRetries) {
     try {
-      const aiClient = getAiClient();
-      if (!aiClient) {
-        return "尚未完成 AI 設定。請在左側邊欄設定 API Key。";
-      }
-      
-      const response = await aiClient.models.generateContent({
-        model: DEFAULT_MODEL,
-        contents: [{ role: 'user', parts: [{ text: query }] }],
-        config: {
-          systemInstruction: SYSTEM_PROMPT,
-        },
+      const response = await fetch("/api/gemini", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...options,
+          customApiKey
+        }),
       });
-      
-      return response.text;
-    } catch (error: any) {
-      console.error(`AI Assistant Error (Attempt ${retries + 1}):`, error);
-      
-      const isQuotaError = error?.status === 429 || error?.code === 429 || error?.message?.includes("quota");
 
-      // Handle Rate Limit (429)
-      if (isQuotaError) {
-        if (retries < maxRetries) {
-          retries++;
-          const delay = Math.pow(2, retries) * 1000;
-          console.warn(`Gemini API Rate Limited. Retrying in ${delay}ms...`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-          continue;
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const status = response.status;
+        const message = errorData.error || response.statusText;
+        
+        if (status === 429) {
+          if (retries < maxRetries) {
+            retries++;
+            // Exponential backoff: 2s, 4s, 8s
+            // If the user hit a daily limit (limit: 0), this won't help, but for TPM/RPM it will.
+            const backoff = Math.pow(2, retries) * 1000;
+            console.warn(`Gemini API 429 (Rate Limited). Attempt ${retries} of ${maxRetries}. Retrying in ${backoff}ms...`);
+            await new Promise(resolve => setTimeout(resolve, backoff));
+            continue;
+          }
+          throw new Error("AI 額度已達上限 (Quota Exceeded)。如果您使用的是免費版（Free Tier），請稍等約一分鐘或是確認每日配額是否已滿。");
         }
-        throw new Error("AI 目前負載過高 (Quota Exceeded)，請確認您的 API Key 額度或稍後再試。");
+        
+        throw new Error(message || `API Error ${status}`);
       }
 
-      throw new Error("抱歉，AI 助理目前遇到錯誤。請確認您的 API Key 是否正確且具備權限。");
+      const data = await response.json();
+      return data.text;
+    } catch (error: any) {
+      if (error.message?.includes("Quota Exceeded")) throw error;
+      
+      if (retries < maxRetries) {
+        retries++;
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        continue;
+      }
+      console.error("Gemini API Proxy Error:", error);
+      throw error;
     }
   }
-  throw new Error("AI 助理連線逾時，請稍後再試。");
+}
+
+export async function askAiAssistant(query: string) {
+  try {
+    return await callGeminiApi({
+      query,
+      systemInstruction: SYSTEM_PROMPT,
+      model: DEFAULT_MODEL
+    });
+  } catch (error: any) {
+    console.error("askAiAssistant error:", error);
+    throw new Error(error.message || "抱歉，AI 助理目前遇到錯誤。請稍後再試。");
+  }
 }
 
 export async function analyzeNotesToRequirements(currentRequirements: any[], confirmedNotes: any[], selectedSpace: string) {
-  let retries = 0;
-  const maxRetries = 2;
-
-  while (retries <= maxRetries) {
-    try {
-      const aiClient = getAiClient();
-      if (!aiClient) throw new Error("AI client not initialized");
-      
-      const prompt = `
+  const prompt = `
 ### 目前空間：${selectedSpace} ###
 
 ### 現有「${selectedSpace}」相關規範資料 ###
@@ -173,49 +151,24 @@ ${JSON.stringify(confirmedNotes.map(n => n.content), null, 2)}
 5. **專業用詞**：使用繁體中文專業建築/水電工程術語。
 `;
 
-      const result = await aiClient.models.generateContent({
-        model: DEFAULT_MODEL,
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        config: {
-          responseMimeType: "application/json",
-          systemInstruction: `妳是一位專業的建築規範分析師與資深編輯。妳擅長進行重複性檢查與資訊增量更新。妳必須確保現有的規範內容不被無故刪除，且新內容能精確歸類。妳的目標是產出完美去重且結構嚴謹的 JSON。`
-        }
-      });
+  try {
+    const text = await callGeminiApi({
+      query: prompt,
+      responseMimeType: "application/json",
+      systemInstruction: `妳是一位專業的建築規範分析師與資深編輯。妳擅長進行重複性檢查與資訊增量更新。妳必須確保現有的規範內容不被無故刪除，且新內容能精確歸類。妳的目標是產出完美去重且結構嚴謹的 JSON。`
+    });
 
-      const text = result.text;
-      if (!text) return null;
-      
-      const jsonStr = text.replace(/```json|```/gi, "").trim();
-      return JSON.parse(jsonStr);
-    } catch (error: any) {
-      console.error(`AI Analysis Error (Attempt ${retries + 1}):`, error);
-      const isQuotaError = error?.status === 429 || error?.code === 429 || error?.message?.includes("quota");
-      
-      if (isQuotaError && retries < maxRetries) {
-        retries++;
-        await new Promise(resolve => setTimeout(resolve, Math.pow(2, retries) * 1000));
-        continue;
-      }
-      
-      if (isQuotaError) {
-        throw new Error("AI 分析額度已達上限 (Quota Exceeded)，請確認您的 API Key 方案。");
-      }
-      throw error;
-    }
+    if (!text) return null;
+    const jsonStr = text.replace(/```json|```/gi, "").trim();
+    return JSON.parse(jsonStr);
+  } catch (error) {
+    console.error("analyzeNotesToRequirements error:", error);
+    throw error;
   }
-  throw new Error("AI 分析連線逾時");
 }
 
 export async function deduplicateData(type: 'requirements' | 'checklist', data: any[]) {
-  let retries = 0;
-  const maxRetries = 1;
-
-  while (retries <= maxRetries) {
-    try {
-      const aiClient = getAiClient();
-      if (!aiClient) throw new Error("AI client not initialized");
-
-      const prompt = `
+  const prompt = `
 請協助彙整並清理以下${type === 'requirements' ? '工程規範' : '查檢清單'}資料。
 目標：
 1. **移除重複**：內容相同或語意高度重疊的項目必須合併。
@@ -230,46 +183,26 @@ ${JSON.stringify(data.map(d => {
 
 請輸出清理後的完整 JSON 陣列。
 ${type === 'requirements' ? '物件格式: [{ title: string, points: string[] }]' : '物件格式: [{ text: string, checked: boolean, order: number }]'}
-    `;
+`;
 
-      const result = await aiClient.models.generateContent({
-        model: DEFAULT_MODEL,
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        config: {
-          responseMimeType: "application/json",
-          systemInstruction: `妳是一位資深的數據清洗專家與工程合約編輯。妳的目標是將冗長的清單轉化為精煉、不重複且具備高度邏輯性的技術文獻。`
-        }
-      });
+  try {
+    const text = await callGeminiApi({
+      query: prompt,
+      responseMimeType: "application/json",
+      systemInstruction: `妳是一位資深的數據清洗專家與工程合約編輯。妳的目標是將冗長的清單轉化為精煉、不重複且具備高度邏輯性的技術文獻。`
+    });
 
-      const text = result.text;
-      if (!text) return null;
-      const jsonStr = text.replace(/```json|```/gi, "").trim();
-      return JSON.parse(jsonStr);
-    } catch (error: any) {
-      console.error(`AI Cleanup Error (Attempt ${retries + 1}):`, error);
-      const isQuotaError = error?.status === 429 || error?.code === 429 || error?.message?.includes("quota");
-      
-      if (isQuotaError && retries < maxRetries) {
-        retries++;
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        continue;
-      }
-      
-      if (isQuotaError) {
-        throw new Error("AI 清理額度已達上限 (Quota Exceeded)。");
-      }
-      throw error;
-    }
+    if (!text) return null;
+    const jsonStr = text.replace(/```json|```/gi, "").trim();
+    return JSON.parse(jsonStr);
+  } catch (error) {
+    console.error("deduplicateData error:", error);
+    throw error;
   }
-  throw new Error("AI 清理連線逾時");
 }
 
 export async function analyzeFileToSpecs(fileData: { data: string, mimeType: string }) {
-  try {
-    const aiClient = getAiClient();
-    if (!aiClient) throw new Error("AI client not initialized");
-
-    const prompt = `
+  const prompt = `
 請分析這張截圖或文件中的工程需求，並將其分類整理為：
 1. **Engineering Specifications (工程規範)**：技術參數、材質要求、尺寸規定。
 2. **Checklist Items (查檢項目)**：需現場確認或查核的具體條目。
@@ -281,8 +214,8 @@ export async function analyzeFileToSpecs(fileData: { data: string, mimeType: str
 }
     `;
 
-    const result = await aiClient.models.generateContent({
-      model: DEFAULT_MODEL,
+  try {
+    const text = await callGeminiApi({
       contents: [
         {
           role: 'user',
@@ -292,22 +225,16 @@ export async function analyzeFileToSpecs(fileData: { data: string, mimeType: str
           ]
         }
       ],
-      config: {
-        responseMimeType: "application/json",
-        systemInstruction: `妳是一位專業的工程圖面與合約分析師。妳能精準辨識圖片或 PDF 文件中的手寫筆記、公文要點與圖面標註，並將其轉化為結構化的工程規範。格式務必嚴格遵守 JSON。`
-      }
+      responseMimeType: "application/json",
+      systemInstruction: `妳是一位專業的工程圖面與合約分析師。妳能精準辨識圖片或 PDF 文件中的手寫筆記、公文要點與圖面標註，並將其轉化為結構化的工程規範。格式務必嚴格遵守 JSON。`
     });
 
-    const text = result.text;
     if (!text) return null;
     const jsonStr = text.replace(/```json|```/gi, "").trim();
     return JSON.parse(jsonStr);
   } catch (error: any) {
-    console.error("File Analysis Error:", error);
-    const isQuotaError = error?.status === 429 || error?.code === 429 || error?.message?.includes("quota");
-    if (isQuotaError) {
-      throw new Error("AI 文件分析額度已達上限 (Quota Exceeded)。");
-    }
+    console.error("analyzeFileToSpecs error:", error);
     throw error;
   }
 }
+
