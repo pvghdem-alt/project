@@ -176,6 +176,7 @@ function getRequirementsForSpace(reqs: RequirementCategory[], space: string | nu
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
+  const isNursingDept = user?.email === 'user@ptvgh.gov.tw';
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
@@ -1263,9 +1264,9 @@ export default function App() {
                  active={activeFloor === map.id} 
                  onClick={() => setActiveFloor(map.id)}
                  collapsed={!sidebarOpen}
-                 onDelete={user ? () => handleDeleteFloor(map.id, map.name) : undefined}
-                 user={user}
-                 onDoubleClick={user ? () => { setEditingFloorId(map.id); setFloorEditName(map.name); } : undefined}
+                 onDelete={user && !isNursingDept ? () => handleDeleteFloor(map.id, map.name) : undefined}
+                 user={user && !isNursingDept ? user : null}
+                 onDoubleClick={user && !isNursingDept ? () => { setEditingFloorId(map.id); setFloorEditName(map.name); } : undefined}
                  isEditing={editingFloorId === map.id}
                  editValue={floorEditName}
                  onEditChange={setFloorEditName}
@@ -1274,7 +1275,7 @@ export default function App() {
                />
              ))}
              
-             {user && (
+             {user && !isNursingDept && (
                <button 
                  onClick={() => setShowAddMapModal(true)}
                  className={`w-full flex items-center gap-3 p-3 rounded-xl text-slate-500 hover:bg-black/5 hover:text-blue-600 transition-all border border-dashed border-slate-300 mt-2 ${!sidebarOpen && 'justify-center'}`}
@@ -1292,7 +1293,7 @@ export default function App() {
                 <h3 className={`text-[10px] font-bold text-slate-400 uppercase tracking-widest ${!sidebarOpen && 'hidden'}`}>空間細部討論</h3>
              </div>
 
-             {user && (
+             {user && !isNursingDept && (
                <button 
                   onClick={() => setShowAddTopic({ open: !showAddTopic.open || showAddTopic.type !== 'space', type: 'space' })}
                   className={`w-full flex items-center gap-3 px-4 py-2 text-blue-500 hover:bg-blue-50 rounded-lg transition-colors mb-2 ${!sidebarOpen && 'justify-center'}`}
@@ -1328,7 +1329,7 @@ export default function App() {
 
              <Reorder.Group axis="y" values={customTopics.filter(t => (t.type === 'space' || !t.type) && (t.isDefault || t.floorId === activeFloor || t.floorId === 'global'))} onReorder={handleReorderTopics} className="space-y-1">
                 {customTopics.filter(t => (t.type === 'space' || !t.type) && (t.isDefault || t.floorId === activeFloor || t.floorId === 'global')).map((topic) => (
-                  <Reorder.Item key={topic.id} value={topic} dragListener={!!user}>
+                  <Reorder.Item key={topic.id} value={topic} dragListener={!!user && !isNursingDept}>
                <NavItem 
                  key={topic.id}
                  icon={<Layout size={20} />} 
@@ -1337,15 +1338,15 @@ export default function App() {
                  onClick={() => setSelectedSpace(topic.name)}
                  collapsed={!sidebarOpen}
                  badgeCount={notes.filter(n => n.space === topic.name && n.floor === activeFloor && n.status === 'pending').length}
-                  onDoubleClick={(user && (!topic.isDefault || user)) ? () => { setEditingTopicId(topic.id); setTopicEditName(topic.name); } : undefined}
+                  onDoubleClick={(user && !isNursingDept && (!topic.isDefault || user)) ? () => { setEditingTopicId(topic.id); setTopicEditName(topic.name); } : undefined}
                  isEditing={editingTopicId === topic.id}
                  editValue={topicEditName}
                  onEditChange={setTopicEditName}
                  onEditSubmit={() => handleUpdateTopic(topic.id)}
                  onEditCancel={() => setEditingTopicId(null)}
-                  onDelete={(user && (!topic.isDefault || user)) ? () => handleDeleteTopic(topic.id, topic.name) : undefined}
-                 onCopy={user ? () => handleCopyTopic(topic) : undefined}
-                 user={user}
+                  onDelete={(user && !isNursingDept && (!topic.isDefault || user)) ? () => handleDeleteTopic(topic.id, topic.name) : undefined}
+                 onCopy={user && !isNursingDept ? () => handleCopyTopic(topic) : undefined}
+                 user={user && !isNursingDept ? user : null}
                  isSortable={true}
                />
              </Reorder.Item>
@@ -1359,7 +1360,7 @@ export default function App() {
                 <h3 className={`text-[10px] font-bold text-slate-400 uppercase tracking-widest ${!sidebarOpen && 'hidden'}`}>分項工程</h3>
              </div>
 
-             {user && (
+             {user && !isNursingDept && (
                <button 
                   onClick={() => setShowAddTopic({ open: !showAddTopic.open || showAddTopic.type !== 'trade', type: 'trade' })}
                   className={`w-full flex items-center gap-3 px-4 py-2 text-blue-500 hover:bg-blue-50 rounded-lg transition-colors mb-2 ${!sidebarOpen && 'justify-center'}`}
@@ -1395,7 +1396,7 @@ export default function App() {
 
               <Reorder.Group axis="y" values={customTopics.filter(t => t.type === 'trade')} onReorder={handleReorderTopics} className="space-y-1">
                  {customTopics.filter(t => t.type === 'trade').map((topic) => (
-                   <Reorder.Item key={topic.id} value={topic} dragListener={!!user}>
+                   <Reorder.Item key={topic.id} value={topic} dragListener={!!user && !isNursingDept}>
                  <NavItem 
                    key={topic.id}
                    icon={<ClipboardList size={20} />} 
@@ -1403,15 +1404,15 @@ export default function App() {
                    active={selectedSpace === topic.name} 
                    onClick={() => setSelectedSpace(topic.name)}
                    collapsed={!sidebarOpen}
-                   user={user}
-                   onDoubleClick={(user && (!topic.isDefault || user)) ? () => { setEditingTopicId(topic.id); setTopicEditName(topic.name); } : undefined}
+                   user={user && !isNursingDept ? user : null}
+                   onDoubleClick={(user && !isNursingDept && (!topic.isDefault || user)) ? () => { setEditingTopicId(topic.id); setTopicEditName(topic.name); } : undefined}
                    isEditing={editingTopicId === topic.id}
                    editValue={topicEditName}
                    onEditChange={setTopicEditName}
                    onEditSubmit={() => handleUpdateTopic(topic.id)}
                    onEditCancel={() => setEditingTopicId(null)}
-                   onDelete={(user && (!topic.isDefault || user)) ? () => handleDeleteTopic(topic.id, topic.name) : undefined}
-                   onCopy={user ? () => handleCopyTopic(topic) : undefined}
+                   onDelete={(user && !isNursingDept && (!topic.isDefault || user)) ? () => handleDeleteTopic(topic.id, topic.name) : undefined}
+                   onCopy={user && !isNursingDept ? () => handleCopyTopic(topic) : undefined}
                    isSortable={true}
                  />
                </Reorder.Item>
@@ -1599,7 +1600,7 @@ export default function App() {
                             <h3 className="text-3xl font-black text-slate-900 tracking-tight">{selectedSpace}</h3>
                           </div>
                           <div className="flex items-center gap-2">
-                            {activeMainTab === 'discussion' && user && (
+                            {activeMainTab === 'discussion' && user && !isNursingDept && (
                               <button 
                                 onClick={() => {
                                   // Pre-select all requirements of the current space
@@ -1630,7 +1631,7 @@ export default function App() {
                               <h4 className="text-base font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
                                 <ImageIcon size={18} className="text-blue-500" /> 空間現況/示意照片
                               </h4>
-                              {user && (
+                              {user && !isNursingDept && (
                                 <button 
                                   onClick={() => photoInputRef.current?.click()}
                                   disabled={isUploadingPhoto}
@@ -1665,7 +1666,7 @@ export default function App() {
                                         className="w-full h-full object-cover"
                                         loading="lazy"
                                       />
-                                      {user && (
+                                      {user && !isNursingDept && (
                                         <button 
                                           onClick={(e) => { e.stopPropagation(); handleDeletePhoto(photo.id); }}
                                           className="absolute top-2 right-2 p-1.5 bg-red-600 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity shadow-lg hover:bg-red-700"
@@ -1709,7 +1710,7 @@ export default function App() {
                                         <h5 className="text-lg font-black text-blue-700 border-l-4 border-blue-500 pl-4 py-1 uppercase tracking-tight">
                                           {cat.title}
                                         </h5>
-                                        {user && (
+                                        {user && !isNursingDept && (
                                           <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                                             <button 
                                               onClick={() => setEditingReq({ id: cat.id, title: cat.title, points: cat.points })}
@@ -1797,6 +1798,7 @@ export default function App() {
                           onToggleStatus={handleToggleNoteStatus}
                           onDelete={handleDeleteNote}
                           onEdit={(note) => setEditingNote(note)}
+                          currentUserEmail={user?.email}
                         />
                       </div>
                     </div>
@@ -2502,8 +2504,10 @@ function Hotspot({ label, color = "blue", onClick }: { label: string, color?: st
   );
 }
 
-function NoteItem({ note, showLabel = false, onToggleStatus, onDelete, onEdit }: { note: Note, showLabel?: boolean, onToggleStatus: (id: string, current: string) => void, onDelete: (id: string) => void, onEdit: (note: Note) => void }) {
+function NoteItem({ note, showLabel = false, onToggleStatus, onDelete, onEdit, currentUserEmail }: { note: Note, showLabel?: boolean, onToggleStatus: (id: string, current: string) => void, onDelete: (id: string) => void, onEdit: (note: Note) => void, currentUserEmail?: string | null }) {
   const isConfirmed = note.status === 'confirmed';
+  const isNursingDept = currentUserEmail === 'user@ptvgh.gov.tw';
+  const canModify = !isNursingDept || note.authorEmail === currentUserEmail;
   
   const getAuthorDisplay = (email: string | undefined | null) => {
     if (!email) return '工程承辦人';
@@ -2529,27 +2533,33 @@ function NoteItem({ note, showLabel = false, onToggleStatus, onDelete, onEdit }:
           </span>
         </div>
         <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-           <button 
-            onClick={() => onToggleStatus(note.id, note.status)}
-            className={`${note.status === 'confirmed' ? 'text-emerald-500' : 'text-slate-500 hover:text-emerald-400'} p-0.5`}
-            title="確認狀態"
-           >
-            <CheckCircle2 size={10} />
-           </button>
-           <button 
-            onClick={() => onEdit(note)}
-            className="text-slate-500 hover:text-blue-600 p-0.5"
-            title="編輯內容"
-           >
-            <FileText size={10} />
-           </button>
-           <button 
-            onClick={() => onDelete(note.id)}
-            className="text-slate-500 hover:text-red-500 p-0.5"
-            title="刪除紀錄"
-           >
-            <X size={10} />
-           </button>
+           {canModify && !isNursingDept && (
+             <button 
+               onClick={() => onToggleStatus(note.id, note.status)}
+               className={`${note.status === 'confirmed' ? 'text-emerald-500' : 'text-slate-500 hover:text-emerald-400'} p-0.5`}
+               title="確認狀態"
+             >
+               <CheckCircle2 size={10} />
+             </button>
+           )}
+           {canModify && (
+             <button 
+               onClick={() => onEdit(note)}
+               className="text-slate-500 hover:text-blue-600 p-0.5"
+               title="編輯內容"
+             >
+               <FileText size={10} />
+             </button>
+           )}
+           {canModify && (
+             <button 
+               onClick={() => onDelete(note.id)}
+               className="text-slate-500 hover:text-red-500 p-0.5"
+               title="刪除紀錄"
+             >
+               <X size={10} />
+             </button>
+           )}
         </div>
       </div>
       {showLabel && (
@@ -2564,7 +2574,7 @@ function NoteItem({ note, showLabel = false, onToggleStatus, onDelete, onEdit }:
   );
 }
 
-function NotesArchived({ notes, onToggleStatus, onDelete, onEdit }: { notes: Note[], onToggleStatus: any, onDelete: any, onEdit: any }) {
+function NotesArchived({ notes, onToggleStatus, onDelete, onEdit, currentUserEmail }: { notes: Note[], onToggleStatus: any, onDelete: any, onEdit: any, currentUserEmail?: string | null }) {
   const [expandedDates, setExpandedDates] = useState<string[]>([]);
 
   // Group by date
@@ -2630,6 +2640,7 @@ function NotesArchived({ notes, onToggleStatus, onDelete, onEdit }: { notes: Not
                     onToggleStatus={onToggleStatus} 
                     onDelete={onDelete} 
                     onEdit={onEdit} 
+                    currentUserEmail={currentUserEmail}
                   />
                 ))}
               </motion.div>
