@@ -44,7 +44,16 @@ async function callGeminiApi(options: {
   responseMimeType?: string;
 }) {
   if (customApiKey && genAI) {
-    const modelsToTry = [options.model || DEFAULT_MODEL, "gemini-1.5-pro", "gemini-1.5-flash"];
+    const modelsToTry = [
+      options.model || DEFAULT_MODEL, 
+      "gemini-2.5-flash",
+      "gemini-2.0-flash-lite-preview-02-05",
+      "gemini-1.5-flash-latest",
+      "gemini-1.5-pro-latest",
+      "gemini-1.5-flash", 
+      "gemini-1.5-pro",
+      "gemini-pro"
+    ];
     let lastError: any = null;
     
     for (const modelToTry of modelsToTry) {

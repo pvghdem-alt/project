@@ -166,6 +166,13 @@ interface SpacePhoto {
   authorId: string;
 }
 
+function getRequirementsForSpace(reqs: RequirementCategory[], space: string | null) {
+  if (!space) return [];
+  const specific = reqs.filter(k => k.space === space && !k.id.startsWith('default-'));
+  if (specific.length > 0) return specific;
+  return reqs.filter(k => !k.space && (k.title === space || k.title.includes(space)));
+}
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [showLoginModal, setShowLoginModal] = useState(false);
@@ -398,10 +405,7 @@ export default function App() {
     setIsCleaning(true);
     setNotification({ message: 'AI 正在整合會議紀錄至工程規範...', type: 'ai' });
     try {
-      const sourceReqs = requirements.filter(k => 
-        (k.space === selectedSpace) ||
-        (!k.space && (k.title === selectedSpace || k.title.includes(selectedSpace || '')))
-      );
+      const sourceReqs = getRequirementsForSpace(requirements, selectedSpace);
 
       const sourceNotes = notes.filter(n => n.space === selectedSpace && n.floor === activeFloor && n.status === 'pending');
 
@@ -679,10 +683,7 @@ export default function App() {
       const sourceNotes = notes.filter(n => n.status === 'pending' && n.space === selectedSpace);
       const analysisInput = sourceNotes.length > 0 ? sourceNotes : notes.filter(n => n.space === selectedSpace);
       
-      const sourceReqs = requirements.filter(k => 
-        (k.space === selectedSpace) ||
-        (!k.space && (k.title === selectedSpace || k.title.includes(selectedSpace || '')))
-      );
+      const sourceReqs = getRequirementsForSpace(requirements, selectedSpace);
       
       const aiResult = await analyzeNotesToRequirements(
         sourceReqs, 
@@ -1599,10 +1600,7 @@ export default function App() {
                               <button 
                                 onClick={() => {
                                   // Pre-select all requirements of the current space
-                                  const currentReqs = requirements.filter(k => 
-                                    (k.space === selectedSpace) ||
-                                    (!k.space && (k.title === selectedSpace || k.title.includes(selectedSpace || '')))
-                                  );
+                                  const currentReqs = getRequirementsForSpace(requirements, selectedSpace);
                                   setCopySpecsSelectedReqs(currentReqs.map(r => r.id));
                                   setCopySpecsSelectedTargets([]);
                                   setShowCopySpecsModal(true);
@@ -1698,10 +1696,7 @@ export default function App() {
                               </div>
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                 {(() => {
-                                  const filtered = requirements.filter(k => 
-                                    (k.space === selectedSpace) ||
-                                    (!k.space && (k.title === selectedSpace || k.title.includes(selectedSpace || '')))
-                                  );
+                                  const filtered = getRequirementsForSpace(requirements, selectedSpace);
 
                                   if (filtered.length === 0) return <p className="text-slate-500 text-sm italic col-span-full text-center py-12">無特定規範，請點擊右側輸入討論細節</p>;
 
@@ -1831,10 +1826,7 @@ export default function App() {
                       <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest">第一步：選擇要複製的分類 ({copySpecsSelectedReqs.length})</h4>
                       <button 
                         onClick={() => {
-                          const currentReqs = requirements.filter(k => 
-                            (k.space === selectedSpace) ||
-                            (!k.space && (k.title === selectedSpace || k.title.includes(selectedSpace || '')))
-                          );
+                          const currentReqs = getRequirementsForSpace(requirements, selectedSpace);
                           setCopySpecsSelectedReqs(currentReqs.map(r => r.id));
                         }}
                         className="text-[10px] text-blue-600 font-bold hover:underline"
@@ -1843,10 +1835,7 @@ export default function App() {
                       </button>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {requirements.filter(k => 
-                        (k.space === selectedSpace) ||
-                        (!k.space && (k.title === selectedSpace || k.title.includes(selectedSpace || '')))
-                      ).map((req) => (
+                      {getRequirementsForSpace(requirements, selectedSpace).map((req) => (
                         <label key={req.id} className={`flex items-center gap-3 p-4 rounded-2xl border-2 transition-all cursor-pointer ${copySpecsSelectedReqs.includes(req.id) ? 'border-blue-500 bg-blue-50' : 'border-slate-100 bg-slate-50 opacity-60 hover:opacity-100'}`}>
                           <input 
                             type="checkbox"
