@@ -46,38 +46,33 @@ async function callGeminiApi(options: {
   if (customApiKey && genAI) {
     try {
       const modelName = options.model || DEFAULT_MODEL;
-      // Use v1beta which is more widely compatible for standard API keys especially on client-side
-      const model = genAI.getGenerativeModel(
-        { model: modelName },
-        { apiVersion: "v1beta" }
-      );
+      // Use the standard model initialization without forcing an API version
+      const model = genAI.getGenerativeModel({ 
+        model: modelName,
+        systemInstruction: options.systemInstruction 
+      });
 
       let result;
-      // In v1beta, system instructions should be passed in the model initialization or as part of the content
-      // If we use systemInstruction in getGenerativeModel, we need to pass it as an object
-      const modelWithSystem = genAI.getGenerativeModel(
-        { 
-          model: modelName,
-          systemInstruction: options.systemInstruction 
-        },
-        { apiVersion: "v1beta" }
-      );
-      
       if (options.contents) {
-        result = await modelWithSystem.generateContent({
+        result = await model.generateContent({
           contents: options.contents,
           generationConfig: {
             responseMimeType: options.responseMimeType || "text/plain",
           }
         });
       } else {
-        result = await modelWithSystem.generateContent(options.query || "");
+        result = await model.generateContent(options.query || "");
       }
 
       const response = await result.response;
       return response.text();
     } catch (clientError: any) {
-      console.warn("Client-side Gemini call failed, falling back to proxy:", clientError);
+      console.warn("Client-side Gemini call failed:", clientError);
+      // In static environments like GitHub Pages, if client call fails, we shouldn't attempt the proxy
+      // since it will definitely return 405. Instead, we throw the client error.
+      if (window.location.hostname.includes("github.io")) {
+        throw new Error(`AI 呼叫失敗：${clientError.message || "請檢查您的 API Key 是否正確且具備 Gemini API 存取權限。"}`);
+      }
     }
   }
 
