@@ -398,11 +398,11 @@ export default function App() {
     setIsCleaning(true);
     setNotification({ message: 'AI 正在整合會議紀錄至工程規範...', type: 'ai' });
     try {
-      const CATEGORIES = ['醫療氣體設備', '燈光控制', '空調設備', '衛浴設備', '櫥櫃/家具', '天花板', '地面工程', '牆壁/油漆', '電力/資訊', '消防設備', '門窗工程', '護士呼叫系統'];
-      const currentSpaceReqs = requirements.filter(r => r.title === selectedSpace || r.title.includes(selectedSpace));
-      const categoryReqs = requirements.filter(r => CATEGORIES.includes(r.title));
-      const sourceReqs = [...currentSpaceReqs, ...categoryReqs];
-      
+      const sourceReqs = requirements.filter(k => 
+        (k.space === selectedSpace) ||
+        (!k.space && (k.title === selectedSpace || k.title.includes(selectedSpace || '')))
+      );
+
       const sourceNotes = notes.filter(n => n.space === selectedSpace && n.floor === activeFloor && n.status === 'pending');
 
       if (sourceNotes.length === 0) {
@@ -679,8 +679,13 @@ export default function App() {
       const sourceNotes = notes.filter(n => n.status === 'pending' && n.space === selectedSpace);
       const analysisInput = sourceNotes.length > 0 ? sourceNotes : notes.filter(n => n.space === selectedSpace);
       
+      const sourceReqs = requirements.filter(k => 
+        (k.space === selectedSpace) ||
+        (!k.space && (k.title === selectedSpace || k.title.includes(selectedSpace || '')))
+      );
+      
       const aiResult = await analyzeNotesToRequirements(
-        requirements.filter(r => r.space === selectedSpace), 
+        sourceReqs, 
         analysisInput, 
         selectedSpace || 'General'
       );

@@ -83,6 +83,9 @@ async function callGeminiApi(options: {
     
     // If we're here, all models failed or a non-404 error occurred
     if (window.location.hostname.includes("github.io") && lastError) {
+      if (lastError.message?.includes("429") || lastError.status === 429) {
+        throw new Error("AI 額度已達上限 (Quota Exceeded)。請稍後再試，或在「API KEY 已設定」頁面更換另一組沒有超額的 API Key。");
+      }
       throw new Error(`AI 呼叫失敗：${lastError.message || "請檢查您的 API Key 是否正確且具備 Gemini API 存取權限。"}`);
     }
   }
