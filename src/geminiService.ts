@@ -15,7 +15,7 @@ export function setCustomApiKey(key: string) {
   console.log("Custom API Key stored and initialized.");
 }
 
-const DEFAULT_MODEL = "gemini-1.5-flash"; 
+const DEFAULT_MODEL = "gemini-2.0-flash"; 
 
 const SYSTEM_PROMPT = `
 你是一位專業的醫療空間設計顧問，正在協助工程承辦人員與護理長討論「屏東榮總龍泉分院B棟3F、5F改建工程」。
@@ -44,35 +44,46 @@ async function callGeminiApi(options: {
   responseMimeType?: string;
 }) {
   if (customApiKey && genAI) {
-    try {
-      const modelName = options.model || DEFAULT_MODEL;
-      // Use the standard model initialization without forcing an API version
-      const model = genAI.getGenerativeModel({ 
-        model: modelName,
-        systemInstruction: options.systemInstruction 
-      });
-
-      let result;
-      if (options.contents) {
-        result = await model.generateContent({
-          contents: options.contents,
-          generationConfig: {
-            responseMimeType: options.responseMimeType || "text/plain",
-          }
+    const modelsToTry = [options.model || DEFAULT_MODEL, "gemini-1.5-pro", "gemini-1.5-flash"];
+    let lastError: any = null;
+    
+    for (const modelToTry of modelsToTry) {
+      try {
+        const model = genAI.getGenerativeModel({ 
+          model: modelToTry,
+          systemInstruction: options.systemInstruction 
         });
-      } else {
-        result = await model.generateContent(options.query || "");
-      }
 
-      const response = await result.response;
-      return response.text();
-    } catch (clientError: any) {
-      console.warn("Client-side Gemini call failed:", clientError);
-      // In static environments like GitHub Pages, if client call fails, we shouldn't attempt the proxy
-      // since it will definitely return 405. Instead, we throw the client error.
-      if (window.location.hostname.includes("github.io")) {
-        throw new Error(`AI 呼叫失敗：${clientError.message || "請檢查您的 API Key 是否正確且具備 Gemini API 存取權限。"}`);
+        let result;
+        if (options.contents) {
+          result = await model.generateContent({
+            contents: options.contents,
+            generationConfig: {
+              responseMimeType: options.responseMimeType || "text/plain",
+            }
+          });
+        } else {
+          result = await model.generateContent(options.query || "");
+        }
+
+        const response = await result.response;
+        return response.text();
+      } catch (clientError: any) {
+        console.warn(`Client-side Gemini call failed for model ${modelToTry}:`, clientError);
+        lastError = clientError;
+        
+        // If it's a 404 (not found) and we have more models to try, continue to the next one
+        if (clientError.message?.includes("not found") || clientError.status === 404 || clientError.message?.includes("404")) {
+          continue;
+        }
+
+        break; // Stop trying models if it's not a 404 error
       }
+    }
+    
+    // If we're here, all models failed or a non-404 error occurred
+    if (window.location.hostname.includes("github.io") && lastError) {
+      throw new Error(`AI 呼叫失敗：${lastError.message || "請檢查您的 API Key 是否正確且具備 Gemini API 存取權限。"}`);
     }
   }
 
