@@ -37,6 +37,7 @@ import {
   Edit,
   Trash2,
   ChevronDown,
+  ChevronLeft,
   Camera,
   UploadCloud
 } from 'lucide-react';
@@ -184,6 +185,7 @@ export default function App() {
 
   const [activeFloor, setActiveFloor] = useState<FloorKey>('B3F');
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarMode, setSidebarMode] = useState<'root' | 'space' | 'trade'>('root');
   const [isSidebarEditing, setIsSidebarEditing] = useState(false);
   const [viewScale, setViewScale] = useState(1);
   const [selectedSpace, setSelectedSpace] = useState<string | null>(null);
@@ -235,7 +237,7 @@ export default function App() {
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string, name: string, type: 'topic' | 'floor' | 'requirement' } | null>(null);
   const [pendingAiResult, setPendingAiResult] = useState<{ requirements: any[], summary: any, sourceNotes: any[] } | null>(null);
   const [selectedProposedPoints, setSelectedProposedPoints] = useState<Record<string, string[]>>({});
-  const [activeMainTab, setActiveMainTab] = useState<'discussion' | 'photos' | 'map'>('discussion');
+  const [activeMainTab, setActiveMainTab] = useState<'discussion' | 'photos' | 'map' | 'report'>('discussion');
   const [rightSidebarWidth, setRightSidebarWidth] = useState(400);
   const [expandedReqIds, setExpandedReqIds] = useState<string[]>([]);
   const [collapsedChatIndices, setCollapsedChatIndices] = useState<number[]>([]);
@@ -1267,44 +1269,76 @@ export default function App() {
                 </button>
              </div>
           )}
-          <div className="mb-2">
-             <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-4 mb-2">空間總覽</h3>
-             {projectMaps.map(map => (
-               <NavItem 
-                 key={map.id}
-                 icon={<MapIcon size={20} />} 
-                 label={map.name} 
-                 active={activeFloor === map.id} 
-                 onClick={() => setActiveFloor(map.id)}
-                 collapsed={!sidebarOpen}
-                 onDelete={isSidebarEditing && user && !isNursingDept ? () => handleDeleteFloor(map.id, map.name) : undefined}
-                 user={isSidebarEditing && user && !isNursingDept ? user : null}
-                 onDoubleClick={isSidebarEditing && user && !isNursingDept ? () => { setEditingFloorId(map.id); setFloorEditName(map.name); } : undefined}
-                 isEditing={editingFloorId === map.id}
-                 editValue={floorEditName}
-                 onEditChange={setFloorEditName}
-                 onEditSubmit={() => handleUpdateFloor(map.id)}
-                 onEditCancel={() => setEditingFloorId(null)}
-               />
-             ))}
-             
-             {user && !isNursingDept && (
-               <button 
-                 onClick={() => setShowAddMapModal(true)}
-                 className={`w-full flex items-center gap-3 p-3 rounded-xl text-slate-500 hover:bg-black/5 hover:text-blue-600 transition-all border border-dashed border-slate-300 mt-2 ${!sidebarOpen && 'justify-center'}`}
-               >
-                 <Plus size={18} />
-                 {sidebarOpen && <span className="text-sm font-bold uppercase tracking-widest">新增配置圖</span>}
-               </button>
-             )}
-          </div>
 
-          <div className="h-px bg-slate-100 my-4" />
-          
-          <div className="mb-2">
-             <div className="flex items-center justify-between px-4 mb-2">
-                <h3 className={`text-[10px] font-bold text-slate-400 uppercase tracking-widest ${!sidebarOpen && 'hidden'}`}>空間細部討論</h3>
-             </div>
+          <AnimatePresence mode="wait">
+            {sidebarMode === 'root' && (
+              <motion.div
+                key="root"
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="space-y-3"
+              >
+                <div className="mb-4">
+                   <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-4 mb-2">空間總覽</h3>
+                   {projectMaps.map(map => (
+                     <NavItem 
+                       key={map.id}
+                       icon={<MapIcon size={20} />} 
+                       label={map.name} 
+                       active={activeFloor === map.id} 
+                       onClick={() => { setActiveFloor(map.id); setSidebarMode('space'); }}
+                       collapsed={!sidebarOpen}
+                       onDelete={isSidebarEditing && user && !isNursingDept ? () => handleDeleteFloor(map.id, map.name) : undefined}
+                       user={isSidebarEditing && user && !isNursingDept ? user : null}
+                       onDoubleClick={isSidebarEditing && user && !isNursingDept ? () => { setEditingFloorId(map.id); setFloorEditName(map.name); } : undefined}
+                       isEditing={editingFloorId === map.id}
+                       editValue={floorEditName}
+                       onEditChange={setFloorEditName}
+                       onEditSubmit={() => handleUpdateFloor(map.id)}
+                       onEditCancel={() => setEditingFloorId(null)}
+                     />
+                   ))}
+
+                   {user && !isNursingDept && (
+                     <button 
+                       onClick={() => setShowAddMapModal(true)}
+                       className={`w-full flex items-center gap-3 p-3 rounded-xl text-slate-500 hover:bg-black/5 hover:text-blue-600 transition-all border border-dashed border-slate-300 mt-2 ${!sidebarOpen && 'justify-center'}`}
+                     >
+                       <Plus size={18} />
+                       {sidebarOpen && <span className="text-sm font-bold uppercase tracking-widest">新增配置圖</span>}
+                     </button>
+                   )}
+                </div>
+                
+                <button 
+                  onClick={() => setSidebarMode('trade')}
+                  className={`w-full flex items-center gap-3 p-4 rounded-2xl bg-white border border-slate-200 shadow-sm hover:shadow-md hover:border-blue-300 transition-all ${!sidebarOpen && 'justify-center'}`}
+                >
+                  <ClipboardList size={24} className="text-blue-500" />
+                  {sidebarOpen && <span className="text-sm font-black text-slate-700 tracking-wider">分項工程</span>}
+                </button>
+              </motion.div>
+            )}
+
+            {sidebarMode === 'space' && (
+              <motion.div
+                key="space"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="space-y-4"
+              >
+                <div className="mb-2">
+                   <button onClick={() => setSidebarMode('root')} className={`w-full flex items-center gap-2 p-2 text-slate-500 hover:bg-black/5 rounded-lg text-xs font-bold transition-all mb-4 ${!sidebarOpen && 'justify-center'}`}>
+                     <ChevronLeft size={16} />
+                     {sidebarOpen && <span className="uppercase tracking-widest">回到主選單</span>}
+                   </button>
+                   <div className="flex items-center justify-between px-4 mb-2">
+                      <h3 className={`text-[10px] font-bold text-slate-400 uppercase tracking-widest ${!sidebarOpen && 'hidden'}`}>
+                        {activeMap?.name}
+                      </h3>
+                   </div>
 
              {user && !isNursingDept && (
                <button 
@@ -1366,9 +1400,22 @@ export default function App() {
            ))}
          </Reorder.Group>
           </div>
-          <div className="h-px bg-slate-100 my-4" />
+        </motion.div>
+      )}
 
+      {sidebarMode === 'trade' && (
+        <motion.div
+          key="trade"
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: -20 }}
+          className="space-y-4"
+        >
           <div className="mb-4">
+             <button onClick={() => setSidebarMode('root')} className={`w-full flex items-center gap-2 p-2 text-slate-500 hover:bg-black/5 rounded-lg text-xs font-bold transition-all mb-4 ${!sidebarOpen && 'justify-center'}`}>
+               <ChevronLeft size={16} />
+               {sidebarOpen && <span className="uppercase tracking-widest">回到主選單</span>}
+             </button>
              <div className="flex items-center justify-between px-4 mb-2">
                 <h3 className={`text-[10px] font-bold text-slate-400 uppercase tracking-widest ${!sidebarOpen && 'hidden'}`}>分項工程</h3>
              </div>
@@ -1432,9 +1479,20 @@ export default function App() {
              ))}
            </Reorder.Group>
           </div>
+        </motion.div>
+       )}
+      </AnimatePresence>
         </nav>
 
         <div className="p-4 border-t border-slate-200 space-y-4">
+          <button 
+            onClick={() => { setActiveMainTab('report'); setSelectedSpace(null); setSidebarMode('root'); }}
+            className={`w-full flex items-center gap-3 p-3 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 transition-all ${!sidebarOpen && 'justify-center'}`}
+          >
+            <FileText size={18} />
+            {sidebarOpen && <span className="text-sm font-bold uppercase tracking-widest">需求彙整報表</span>}
+          </button>
+          
           <button 
             onClick={() => setShowApiModal(true)}
             className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all ${isApiKeySet ? 'bg-blue-500/10 text-blue-600 border border-blue-500/30' : 'bg-black/5 text-slate-500 border border-transparent hover:bg-black/10'} ${!sidebarOpen && 'justify-center'}`}
@@ -1524,61 +1582,65 @@ export default function App() {
             </AnimatePresence>
 
             {/* Tab Navigation */}
-            <div className="flex items-center justify-between mb-4 shrink-0">
-               <div className="flex p-1 bg-slate-200/50 rounded-xl backdrop-blur-sm border border-slate-200 shadow-sm">
-                  <button 
-                    onClick={() => setActiveMainTab('discussion')}
-                    className={`flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold transition-all duration-300 ${
-                      activeMainTab === 'discussion' 
-                        ? 'bg-white text-blue-600 shadow-lg' 
-                        : 'text-slate-500 hover:text-slate-700'
-                    }`}
-                  >
-                    <MessageSquare size={16} />
-                    討論紀錄
-                  </button>
-                  <button 
-                    onClick={() => setActiveMainTab('photos')}
-                    className={`flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold transition-all duration-300 ${
-                      activeMainTab === 'photos' 
-                        ? 'bg-white text-blue-600 shadow-lg' 
-                        : 'text-slate-500 hover:text-slate-700'
-                    }`}
-                  >
-                    <ImageIcon size={16} />
-                    空間現況/示意照片
-                  </button>
-                  <button 
-                    onClick={() => setActiveMainTab('map')}
-                    className={`flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold transition-all duration-300 ${
-                      activeMainTab === 'map' 
-                        ? 'bg-white text-blue-600 shadow-lg' 
-                        : 'text-slate-500 hover:text-slate-700'
-                    }`}
-                  >
-                    <MapIcon size={16} />
-                    配置圖
-                  </button>
-               </div>
-               
-               {activeMainTab === 'discussion' && selectedSpace && !isNursingDept && (
-                  <div className="flex items-center gap-3">
+            {activeMainTab !== 'report' && (
+              <div className="flex items-center justify-between mb-4 shrink-0">
+                 <div className="flex p-1 bg-slate-200/50 rounded-xl backdrop-blur-sm border border-slate-200 shadow-sm">
                     <button 
-                      onClick={handleCompleteMeeting}
-                      disabled={isCleaning}
-                      className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 disabled:opacity-50 transition-all shadow-md shadow-blue-500/20"
+                      onClick={() => setActiveMainTab('discussion')}
+                      className={`flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold transition-all duration-300 ${
+                        activeMainTab === 'discussion' 
+                          ? 'bg-white text-blue-600 shadow-lg' 
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
                     >
-                      {isCleaning ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                      AI 彙整至工程規範
+                      <MessageSquare size={16} />
+                      討論紀錄
                     </button>
-                  </div>
-               )}
-            </div>
+                    <button 
+                      onClick={() => setActiveMainTab('photos')}
+                      className={`flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold transition-all duration-300 ${
+                        activeMainTab === 'photos' 
+                          ? 'bg-white text-blue-600 shadow-lg' 
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      <ImageIcon size={16} />
+                      空間現況/示意照片
+                    </button>
+                    <button 
+                      onClick={() => setActiveMainTab('map')}
+                      className={`flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold transition-all duration-300 ${
+                        activeMainTab === 'map' 
+                          ? 'bg-white text-blue-600 shadow-lg' 
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      <MapIcon size={16} />
+                      配置圖
+                    </button>
+                 </div>
+                 
+                 {activeMainTab === 'discussion' && selectedSpace && !isNursingDept && (
+                    <div className="flex items-center gap-3">
+                      <button 
+                        onClick={handleCompleteMeeting}
+                        disabled={isCleaning}
+                        className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 disabled:opacity-50 transition-all shadow-md shadow-blue-500/20"
+                      >
+                        {isCleaning ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                        AI 彙整至工程規範
+                      </button>
+                    </div>
+                 )}
+              </div>
+            )}
 
             {/* Main Content Pane */}
             <div className="flex-1 flex overflow-hidden gap-6 lg:gap-8">
               <div className="flex-1 glass-panel rounded-3xl overflow-hidden shadow-2xl border border-white/40 relative flex flex-col">
-                {activeMainTab === 'map' ? (
+                {activeMainTab === 'report' ? (
+                  <ReportView projectMaps={projectMaps} customTopics={customTopics} requirements={requirements} />
+                ) : activeMainTab === 'map' ? (
                   <div className="flex-1 relative overflow-hidden flex flex-col">
                     <div className="p-4 border-b border-slate-100 bg-white/50 backdrop-blur-md flex justify-between items-center z-10 shrink-0">
                       <div className="flex items-center gap-2 text-xs font-bold text-slate-500 uppercase tracking-widest px-2">
@@ -2388,6 +2450,98 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+function ReportView({ projectMaps, customTopics, requirements }: { projectMaps: ProjectMap[], customTopics: Topic[], requirements: RequirementCategory[] }) {
+  const globalTrades = customTopics.filter(t => t.type === 'trade');
+  
+  return (
+    <div className="flex-1 overflow-y-auto custom-scrollbar bg-slate-50 text-slate-800 p-8">
+      <div className="max-w-5xl mx-auto space-y-12">
+        <header className="border-b-4 border-slate-900 pb-6">
+          <h2 className="text-4xl font-black tracking-tight text-slate-900 mb-2">專案需求彙整總表</h2>
+          <p className="text-lg font-bold text-slate-500 uppercase tracking-widest">各樓層空間與分項工程需求整理</p>
+        </header>
+
+        {projectMaps.map(floor => {
+          const floorSpaces = customTopics.filter(t => (t.type === 'space' || !t.type) && (t.isDefault || t.floorId === floor.id || t.floorId === 'global'));
+          if (floorSpaces.length === 0) return null;
+          
+          return (
+            <section key={floor.id} className="space-y-6">
+              <h3 className="text-3xl font-black text-blue-700 border-b-2 border-blue-200 pb-3 flex items-center gap-3">
+                <MapIcon size={28} />
+                {floor.name}
+              </h3>
+              
+              <div className="space-y-8 pl-4 lg:pl-8">
+                {floorSpaces.map(space => {
+                  const reqs = requirements.filter(r => r.space === space.name || (!r.space && (r.title === space.name || r.title.includes(space.name))));
+                  if (reqs.length === 0) return null;
+                  
+                  return (
+                    <div key={space.id} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                      <div className="bg-slate-100 px-6 py-4 border-b border-slate-200">
+                         <h4 className="text-xl font-bold text-slate-800">{space.name}</h4>
+                      </div>
+                      <div className="p-6 space-y-6">
+                        {reqs.map((req, i) => (
+                          <div key={req.id}>
+                            <h5 className="font-bold text-blue-600 mb-3 text-lg">{i + 1}. {req.title}</h5>
+                            <ul className="list-disc pl-6 space-y-2 text-slate-700 leading-relaxed">
+                              {req.points.map((pt, j) => (
+                                <li key={j}>{pt}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          );
+        })}
+
+        {globalTrades.length > 0 && (
+          <section className="space-y-6 mt-16 pt-8 border-t-4 border-slate-200">
+            <h3 className="text-3xl font-black text-emerald-700 border-b-2 border-emerald-200 pb-3 flex items-center gap-3">
+              <ClipboardList size={28} />
+              全區分項工程
+            </h3>
+            
+            <div className="space-y-8 pl-4 lg:pl-8">
+              {globalTrades.map(trade => {
+                const reqs = requirements.filter(r => r.space === trade.name || (!r.space && (r.title === trade.name || r.title.includes(trade.name))));
+                if (reqs.length === 0) return null;
+                
+                return (
+                  <div key={trade.id} className="bg-white rounded-2xl shadow-sm border border-emerald-100 overflow-hidden">
+                    <div className="bg-emerald-50 px-6 py-4 border-b border-emerald-100">
+                       <h4 className="text-xl font-bold text-emerald-900">{trade.name}</h4>
+                    </div>
+                    <div className="p-6 space-y-6">
+                      {reqs.map((req, i) => (
+                        <div key={req.id}>
+                          <h5 className="font-bold text-emerald-600 mb-3 text-lg">{i + 1}. {req.title}</h5>
+                          <ul className="list-disc pl-6 space-y-2 text-slate-700 leading-relaxed">
+                            {req.points.map((pt, j) => (
+                              <li key={j}>{pt}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+      </div>
     </div>
   );
 }
