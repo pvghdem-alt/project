@@ -1287,7 +1287,7 @@ export default function App() {
                        icon={<MapIcon size={20} />} 
                        label={map.name} 
                        active={activeFloor === map.id} 
-                       onClick={() => { setActiveFloor(map.id); setSidebarMode('space'); }}
+                       onClick={() => { setActiveFloor(map.id); setSidebarMode('space'); if (activeMainTab === 'report') setActiveMainTab('discussion'); }}
                        collapsed={!sidebarOpen}
                        onDelete={isSidebarEditing && user && !isNursingDept ? () => handleDeleteFloor(map.id, map.name) : undefined}
                        user={isSidebarEditing && user && !isNursingDept ? user : null}
@@ -1312,7 +1312,7 @@ export default function App() {
                 </div>
                 
                 <button 
-                  onClick={() => setSidebarMode('trade')}
+                  onClick={() => { setSidebarMode('trade'); if (activeMainTab === 'report') setActiveMainTab('discussion'); }}
                   className={`w-full flex items-center gap-3 p-4 rounded-2xl bg-white border border-slate-200 shadow-sm hover:shadow-md hover:border-blue-300 transition-all ${!sidebarOpen && 'justify-center'}`}
                 >
                   <ClipboardList size={24} className="text-blue-500" />
@@ -1382,7 +1382,7 @@ export default function App() {
                  icon={<Layout size={20} />} 
                  label={topic.name} 
                  active={selectedSpace === topic.name} 
-                 onClick={() => setSelectedSpace(topic.name)}
+                 onClick={() => { setSelectedSpace(topic.name); if (activeMainTab === 'report') setActiveMainTab('discussion'); }}
                  collapsed={!sidebarOpen}
                  badgeCount={notes.filter(n => n.space === topic.name && n.floor === activeFloor && n.status === 'pending').length}
                   onDoubleClick={(isSidebarEditing && user && !isNursingDept && (!topic.isDefault || user)) ? () => { setEditingTopicId(topic.id); setTopicEditName(topic.name); } : undefined}
@@ -1462,7 +1462,7 @@ export default function App() {
                    icon={<ClipboardList size={20} />} 
                    label={topic.name} 
                    active={selectedSpace === topic.name} 
-                   onClick={() => setSelectedSpace(topic.name)}
+                   onClick={() => { setSelectedSpace(topic.name); if (activeMainTab === 'report') setActiveMainTab('discussion'); }}
                    collapsed={!sidebarOpen}
                    user={isSidebarEditing && user && !isNursingDept ? user : null}
                    onDoubleClick={(isSidebarEditing && user && !isNursingDept && (!topic.isDefault || user)) ? () => { setEditingTopicId(topic.id); setTopicEditName(topic.name); } : undefined}
