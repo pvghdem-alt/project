@@ -108,7 +108,7 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
     path
   }
   console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  // Not throwing to prevent app crash on Firebase Quota limits.
 }
 
 type FloorKey = string;
