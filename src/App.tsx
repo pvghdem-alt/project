@@ -184,6 +184,8 @@ export default function App() {
 
   const [activeFloor, setActiveFloor] = useState<FloorKey>('B3F');
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [isSidebarEditing, setIsSidebarEditing] = useState(false);
+  const [viewScale, setViewScale] = useState(1);
   const [selectedSpace, setSelectedSpace] = useState<string | null>(null);
   const [notes, setNotes] = useState<Note[]>([]);
   const [newNote, setNewNote] = useState('');
@@ -1254,6 +1256,17 @@ export default function App() {
         </div>
 
         <nav className="flex-1 px-4 space-y-2 mt-4 overflow-y-auto custom-scrollbar">
+          {user && !isNursingDept && (
+             <div className="mb-4">
+                <button 
+                  onClick={() => setIsSidebarEditing(!isSidebarEditing)}
+                  className={`w-full flex items-center justify-center gap-2 p-2 rounded-lg text-xs font-bold transition-all border ${isSidebarEditing ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100'}`}
+                >
+                  <Edit size={14} />
+                  {sidebarOpen && <span>{isSidebarEditing ? '完成編輯並鎖定' : '編輯側欄項目'}</span>}
+                </button>
+             </div>
+          )}
           <div className="mb-2">
              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-4 mb-2">空間總覽</h3>
              {projectMaps.map(map => (
@@ -1264,9 +1277,9 @@ export default function App() {
                  active={activeFloor === map.id} 
                  onClick={() => setActiveFloor(map.id)}
                  collapsed={!sidebarOpen}
-                 onDelete={user && !isNursingDept ? () => handleDeleteFloor(map.id, map.name) : undefined}
-                 user={user && !isNursingDept ? user : null}
-                 onDoubleClick={user && !isNursingDept ? () => { setEditingFloorId(map.id); setFloorEditName(map.name); } : undefined}
+                 onDelete={isSidebarEditing && user && !isNursingDept ? () => handleDeleteFloor(map.id, map.name) : undefined}
+                 user={isSidebarEditing && user && !isNursingDept ? user : null}
+                 onDoubleClick={isSidebarEditing && user && !isNursingDept ? () => { setEditingFloorId(map.id); setFloorEditName(map.name); } : undefined}
                  isEditing={editingFloorId === map.id}
                  editValue={floorEditName}
                  onEditChange={setFloorEditName}
@@ -1329,7 +1342,7 @@ export default function App() {
 
              <Reorder.Group axis="y" values={customTopics.filter(t => (t.type === 'space' || !t.type) && (t.isDefault || t.floorId === activeFloor || t.floorId === 'global'))} onReorder={handleReorderTopics} className="space-y-1">
                 {customTopics.filter(t => (t.type === 'space' || !t.type) && (t.isDefault || t.floorId === activeFloor || t.floorId === 'global')).map((topic) => (
-                  <Reorder.Item key={topic.id} value={topic} dragListener={!!user && !isNursingDept}>
+                  <Reorder.Item key={topic.id} value={topic} dragListener={!!user && !isNursingDept && isSidebarEditing}>
                <NavItem 
                  key={topic.id}
                  icon={<Layout size={20} />} 
@@ -1338,15 +1351,15 @@ export default function App() {
                  onClick={() => setSelectedSpace(topic.name)}
                  collapsed={!sidebarOpen}
                  badgeCount={notes.filter(n => n.space === topic.name && n.floor === activeFloor && n.status === 'pending').length}
-                  onDoubleClick={(user && !isNursingDept && (!topic.isDefault || user)) ? () => { setEditingTopicId(topic.id); setTopicEditName(topic.name); } : undefined}
+                  onDoubleClick={(isSidebarEditing && user && !isNursingDept && (!topic.isDefault || user)) ? () => { setEditingTopicId(topic.id); setTopicEditName(topic.name); } : undefined}
                  isEditing={editingTopicId === topic.id}
                  editValue={topicEditName}
                  onEditChange={setTopicEditName}
                  onEditSubmit={() => handleUpdateTopic(topic.id)}
                  onEditCancel={() => setEditingTopicId(null)}
-                  onDelete={(user && !isNursingDept && (!topic.isDefault || user)) ? () => handleDeleteTopic(topic.id, topic.name) : undefined}
-                 onCopy={user && !isNursingDept ? () => handleCopyTopic(topic) : undefined}
-                 user={user && !isNursingDept ? user : null}
+                  onDelete={(isSidebarEditing && user && !isNursingDept && (!topic.isDefault || user)) ? () => handleDeleteTopic(topic.id, topic.name) : undefined}
+                 onCopy={isSidebarEditing && user && !isNursingDept ? () => handleCopyTopic(topic) : undefined}
+                 user={isSidebarEditing && user && !isNursingDept ? user : null}
                  isSortable={true}
                />
              </Reorder.Item>
@@ -1396,7 +1409,7 @@ export default function App() {
 
               <Reorder.Group axis="y" values={customTopics.filter(t => t.type === 'trade')} onReorder={handleReorderTopics} className="space-y-1">
                  {customTopics.filter(t => t.type === 'trade').map((topic) => (
-                   <Reorder.Item key={topic.id} value={topic} dragListener={!!user && !isNursingDept}>
+                   <Reorder.Item key={topic.id} value={topic} dragListener={!!user && !isNursingDept && isSidebarEditing}>
                  <NavItem 
                    key={topic.id}
                    icon={<ClipboardList size={20} />} 
@@ -1404,15 +1417,15 @@ export default function App() {
                    active={selectedSpace === topic.name} 
                    onClick={() => setSelectedSpace(topic.name)}
                    collapsed={!sidebarOpen}
-                   user={user && !isNursingDept ? user : null}
-                   onDoubleClick={(user && !isNursingDept && (!topic.isDefault || user)) ? () => { setEditingTopicId(topic.id); setTopicEditName(topic.name); } : undefined}
+                   user={isSidebarEditing && user && !isNursingDept ? user : null}
+                   onDoubleClick={(isSidebarEditing && user && !isNursingDept && (!topic.isDefault || user)) ? () => { setEditingTopicId(topic.id); setTopicEditName(topic.name); } : undefined}
                    isEditing={editingTopicId === topic.id}
                    editValue={topicEditName}
                    onEditChange={setTopicEditName}
                    onEditSubmit={() => handleUpdateTopic(topic.id)}
                    onEditCancel={() => setEditingTopicId(null)}
-                   onDelete={(user && !isNursingDept && (!topic.isDefault || user)) ? () => handleDeleteTopic(topic.id, topic.name) : undefined}
-                   onCopy={user && !isNursingDept ? () => handleCopyTopic(topic) : undefined}
+                   onDelete={(isSidebarEditing && user && !isNursingDept && (!topic.isDefault || user)) ? () => handleDeleteTopic(topic.id, topic.name) : undefined}
+                   onCopy={isSidebarEditing && user && !isNursingDept ? () => handleCopyTopic(topic) : undefined}
                    isSortable={true}
                  />
                </Reorder.Item>
@@ -1472,12 +1485,23 @@ export default function App() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+             <div className="flex items-center gap-2 bg-white/50 px-3 py-1.5 rounded-lg border border-slate-200 shadow-sm mr-4">
+               <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest hidden md:inline">顯示比例</span>
+               <input 
+                 type="range" 
+                 min="0.5" max="1.5" step="0.1" 
+                 value={viewScale} 
+                 onChange={(e) => setViewScale(parseFloat(e.target.value))}
+                 className="w-24 accent-blue-600"
+               />
+               <span className="text-[10px] font-bold text-blue-600 w-8">{Math.round(viewScale * 100)}%</span>
+             </div>
           </div>
         </header>
 
         {/* Workspace */}
-        <div className="flex-1 flex overflow-hidden">
-          <div className="flex-1 flex flex-col overflow-hidden bg-brand-bg p-6 relative">
+        <div className="flex-1 flex overflow-hidden relative bg-brand-bg">
+          <div className="flex-1 flex flex-col absolute inset-0 overflow-hidden p-6 origin-top-left transition-transform" style={{ transform: `scale(${viewScale})`, width: `${(1 / viewScale) * 100}%`, height: `${(1 / viewScale) * 100}%` }}>
             <AnimatePresence>
               {notification && (
                 <motion.div 
@@ -1537,7 +1561,7 @@ export default function App() {
                   </button>
                </div>
                
-               {activeMainTab === 'discussion' && selectedSpace && (
+               {activeMainTab === 'discussion' && selectedSpace && !isNursingDept && (
                   <div className="flex items-center gap-3">
                     <button 
                       onClick={handleCompleteMeeting}
@@ -1769,7 +1793,7 @@ export default function App() {
                     <textarea 
                       value={newNote}
                       onChange={(e) => setNewNote(e.target.value)}
-                      placeholder={user ? "請輸入討論建議（支持白話，AI 會代為修飾）..." : "請先登入後再提供建議"}
+                      placeholder={user ? "請描述空間需求：如插座與弱電配置、呼叫系統、設備機電與給排水需求，及櫥櫃水槽樣式。您可以用白話描述，AI 會協助潤飾..." : "請先登入後再提供建議"}
                       disabled={!user}
                       className={`w-full h-32 p-4 border border-slate-200 rounded-2xl text-base text-slate-900 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/5 shadow-inner outline-none resize-none transition-all placeholder:text-slate-400 ${user ? 'bg-slate-50 text-slate-900' : 'bg-slate-100 text-slate-400 cursor-not-allowed'}`}
                     />
