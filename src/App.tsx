@@ -107,7 +107,9 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
     operationType,
     path
   }
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  if (!errInfo.error.includes('Quota limit exceeded')) {
+    console.error('Firestore Error: ', JSON.stringify(errInfo));
+  }
   // Not throwing to prevent app crash on Firebase Quota limits.
 }
 
