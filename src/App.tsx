@@ -192,6 +192,7 @@ export default function App() {
   const [viewScale, setViewScale] = useState(1);
   const [selectedSpace, setSelectedSpace] = useState<string | null>(null);
   const [notes, setNotes] = useState<Note[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
   const [newNote, setNewNote] = useState('');
   const [isListening, setIsListening] = useState(false);
   
@@ -320,20 +321,51 @@ export default function App() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
 
+  useEffect(() => {
+    setShowHistory(false);
+  }, [selectedSpace, activeFloor]);
+
   // Firestore Sync: Notes
   useEffect(() => {
-    const q = query(collection(db, 'notes'), orderBy('createdAt', 'desc'));
+    if (!selectedSpace) {
+      setNotes([]);
+      return;
+    }
+    
+    let q;
+    if (showHistory) {
+      q = query(
+        collection(db, 'notes'), 
+        where('space', '==', selectedSpace)
+      );
+    } else {
+      q = query(
+        collection(db, 'notes'), 
+        where('space', '==', selectedSpace),
+        where('status', '==', 'pending')
+      );
+    }
+
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({
+      let data = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       })) as Note[];
+      
+      // Local filter for floor and sort to avoid complex index requirements
+      data = data.filter(n => n.floor === activeFloor);
+      data.sort((a, b) => {
+        const timeA = a.createdAt?.toMillis ? a.createdAt.toMillis() : new Date(a.timestamp).getTime();
+        const timeB = b.createdAt?.toMillis ? b.createdAt.toMillis() : new Date(b.timestamp).getTime();
+        return timeB - timeA;
+      });
+      
       setNotes(data);
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, 'notes');
     });
     return () => unsubscribe();
-  }, []);
+  }, [selectedSpace, activeFloor, showHistory]);
 
   // Firestore Sync: Topics
   useEffect(() => {
@@ -997,11 +1029,12 @@ export default function App() {
       if (selectedSpace === name) setSelectedSpace(null);
       await deleteDoc(doc(db, 'topics', id));
       
-      const topicNotes = notes.filter(n => n.space === name);
-      if (topicNotes.length > 0) {
+      const notesQ = query(collection(db, 'notes'), where('space', '==', name));
+      const notesSnapshot = await getDocs(notesQ);
+      if (!notesSnapshot.empty) {
         const batch = writeBatch(db);
-        topicNotes.forEach(n => {
-          batch.delete(doc(db, 'notes', n.id));
+        notesSnapshot.docs.forEach(n => {
+          batch.delete(n.ref);
         });
         await batch.commit();
       }
@@ -1387,7 +1420,7 @@ export default function App() {
                  active={selectedSpace === topic.name} 
                  onClick={() => { setSelectedSpace(topic.name); if (activeMainTab === 'report') setActiveMainTab('discussion'); }}
                  collapsed={!sidebarOpen}
-                 badgeCount={notes.filter(n => n.space === topic.name && n.floor === activeFloor && n.status === 'pending').length}
+                 
                   onDoubleClick={(isSidebarEditing && user && !isNursingDept && (!topic.isDefault || user)) ? () => { setEditingTopicId(topic.id); setTopicEditName(topic.name); } : undefined}
                  isEditing={editingTopicId === topic.id}
                  editValue={topicEditName}
@@ -1875,8 +1908,17 @@ export default function App() {
                   <div className="flex-1 min-h-0 flex flex-col bg-white border border-slate-200 rounded-3xl p-6 shadow-xl shadow-slate-200/20 overflow-hidden">
                     <div className="flex items-center justify-between mb-4 shrink-0">
                       <h4 className="text-sm font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 px-1">
-                        <RotateCcw size={16} /> 歷史討論紀錄
+                        <RotateCcw size={16} /> 空間討論版
                       </h4>
+                      {!showHistory && (
+                        <button 
+                          onClick={() => setShowHistory(true)}
+                          className="text-[10px] font-bold px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-lg transition-all flex items-center gap-1.5 uppercase tracking-widest"
+                        >
+                          <Search size={12} />
+                          載入已歸檔歷史紀錄
+                        </button>
+                      )}
                     </div>
                     <div className="flex-1 overflow-y-auto custom-scrollbar relative px-1">
                       <div className="absolute left-6 top-0 bottom-0 w-px bg-slate-100 z-0" />
