@@ -836,6 +836,7 @@ export default function App() {
     if (!user) return;
     try {
       await deleteDoc(doc(db, 'photos', id));
+      setSpacePhotos((prev) => prev.filter(p => p.id !== id));
       setNotification({ message: '照片已刪除', type: 'success' });
       setTimeout(() => setNotification(null), 2000);
     } catch (err) {
@@ -879,7 +880,9 @@ export default function App() {
   const handleToggleNoteStatus = async (id: string, currentStatus: string) => {
     try {
       const noteRef = doc(db, 'notes', id);
-      await updateDoc(noteRef, { status: currentStatus === 'confirmed' ? 'pending' : 'confirmed' });
+      const newStatus = currentStatus === 'confirmed' ? 'pending' : 'confirmed';
+      await updateDoc(noteRef, { status: newStatus });
+      setNotes(prev => prev.map(n => n.id === id ? { ...n, status: newStatus } : n));
     } catch (err) {
       console.error("Error updating note:", err);
     }
@@ -891,6 +894,7 @@ export default function App() {
       await updateDoc(doc(db, 'notes', editingNote.id), {
         content: editingNote.content
       });
+      setNotes(prev => prev.map(n => n.id === editingNote.id ? { ...n, content: editingNote.content } : n));
       setEditingNote(null);
       setNotification({ message: '會議紀錄已更新！', type: 'success' });
       setTimeout(() => setNotification(null), 2000);
@@ -902,6 +906,7 @@ export default function App() {
   const handleDeleteNote = async (id: string) => {
     try {
       await deleteDoc(doc(db, 'notes', id));
+      setNotes(prev => prev.filter(n => n.id !== id));
     } catch (err) {
       console.error("Error deleting note:", err);
     }
