@@ -277,7 +277,7 @@ export default function App() {
   // Firestore Sync: Maps
   useEffect(() => {
     const q = query(collection(db, 'maps'), orderBy('order', 'asc'));
-    getDocs(q).then((snapshot) => {
+    const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as ProjectMap[];
       if (data.length > 0) setProjectMaps(data);
       else {
@@ -287,15 +287,16 @@ export default function App() {
           { id: 'B5F', name: 'B5F 精神科急性病房', viewerUrl: DESIGN_SPECS.B5F.viewerUrl, type: '3d', order: 2 }
         ]);
       }
-    }).catch((error) => {
+    }, (error) => {
       handleFirestoreError(error, OperationType.GET, 'maps');
     });
+    return () => unsubscribe();
   }, []);
 
   // Firestore Sync: Requirements
   useEffect(() => {
     const q = collection(db, 'requirements');
-    getDocs(q).then((snapshot) => {
+    const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as RequirementCategory[];
       const defaults = DESIGN_SPECS.keyPoints.map((k, i) => ({ id: `default-${i}`, ...k }));
       if (data.length > 0) {
@@ -309,9 +310,10 @@ export default function App() {
       } else {
         setRequirements(defaults);
       }
-    }).catch((error) => {
+    }, (error) => {
       handleFirestoreError(error, OperationType.GET, 'requirements');
     });
+    return () => unsubscribe();
   }, []);
 
   useEffect(() => {
@@ -321,21 +323,22 @@ export default function App() {
   // Firestore Sync: Notes
   useEffect(() => {
     const q = query(collection(db, 'notes'), orderBy('createdAt', 'desc'));
-    getDocs(q).then((snapshot) => {
+    const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       })) as Note[];
       setNotes(data);
-    }).catch((error) => {
+    }, (error) => {
       handleFirestoreError(error, OperationType.GET, 'notes');
     });
+    return () => unsubscribe();
   }, []);
 
   // Firestore Sync: Topics
   useEffect(() => {
     const q = query(collection(db, 'topics'), orderBy('order', 'asc'));
-    getDocs(q).then((snapshot) => {
+    const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
@@ -362,9 +365,10 @@ export default function App() {
       } else {
         setCustomTopics(data);
       }
-    }).catch((error) => {
+    }, (error) => {
       handleFirestoreError(error, OperationType.GET, 'topics');
     });
+    return () => unsubscribe();
   }, []);
 
   // Firestore Sync: Space Photos
@@ -374,12 +378,13 @@ export default function App() {
       return;
     }
     const q = query(collection(db, 'photos'), where('space', '==', selectedSpace), orderBy('createdAt', 'desc'));
-    getDocs(q).then((snapshot) => {
+    const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as SpacePhoto[];
       setSpacePhotos(data);
-    }).catch((error) => {
+    }, (error) => {
       handleFirestoreError(error, OperationType.GET, 'photos');
     });
+    return () => unsubscribe();
   }, [selectedSpace]);
 
   const handleAddNote = async () => {
@@ -395,8 +400,7 @@ export default function App() {
       authorId: 'public'
     };
     try {
-      const docRef = await addDoc(collection(db, 'notes'), noteData);
-      setNotes((prev) => [{ id: docRef.id, ...noteData, createdAt: new Date() } as Note, ...prev]);
+      await addDoc(collection(db, 'notes'), noteData);
       setNewNote('');
       setNotification({ message: '紀錄已儲存！', type: 'success' });
       setTimeout(() => setNotification(null), 2000);
@@ -453,7 +457,7 @@ export default function App() {
   // Firestore Sync: Checklist
   useEffect(() => {
     const q = query(collection(db, 'checklist'), orderBy('order', 'asc'));
-    getDocs(q).then((snapshot) => {
+    const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as ChecklistItem[];
       if (data.length > 0) setChecklist(data);
       else {
@@ -463,9 +467,10 @@ export default function App() {
           addDoc(collection(db, 'checklist'), { text, checked: false, order: i, createdAt: serverTimestamp() });
         });
       }
-    }).catch((error) => {
+    }, (error) => {
       handleFirestoreError(error, OperationType.GET, 'checklist');
     });
+    return () => unsubscribe();
   }, []);
 
   const handleUpdateRequirement = async () => {
@@ -789,20 +794,12 @@ export default function App() {
         
         const base64 = await base64Promise;
         
-        const docRef = await addDoc(collection(db, 'photos'), {
+        await addDoc(collection(db, 'photos'), {
           space: selectedSpace,
           url: base64,
           createdAt: serverTimestamp(),
           authorId: user?.uid || 'guest'
         });
-        
-        setSpacePhotos((prev) => [{
-          id: docRef.id,
-          space: selectedSpace,
-          url: base64,
-          createdAt: new Date() as any,
-          authorId: user?.uid || 'guest'
-        }, ...prev]);
       }
 
       setNotification({ message: `成功上傳 ${files.length} 張照片`, type: 'success' });
@@ -836,7 +833,6 @@ export default function App() {
     if (!user) return;
     try {
       await deleteDoc(doc(db, 'photos', id));
-      setSpacePhotos((prev) => prev.filter(p => p.id !== id));
       setNotification({ message: '照片已刪除', type: 'success' });
       setTimeout(() => setNotification(null), 2000);
     } catch (err) {
@@ -882,7 +878,6 @@ export default function App() {
       const noteRef = doc(db, 'notes', id);
       const newStatus = currentStatus === 'confirmed' ? 'pending' : 'confirmed';
       await updateDoc(noteRef, { status: newStatus });
-      setNotes(prev => prev.map(n => n.id === id ? { ...n, status: newStatus } : n));
     } catch (err) {
       console.error("Error updating note:", err);
     }
@@ -894,7 +889,6 @@ export default function App() {
       await updateDoc(doc(db, 'notes', editingNote.id), {
         content: editingNote.content
       });
-      setNotes(prev => prev.map(n => n.id === editingNote.id ? { ...n, content: editingNote.content } : n));
       setEditingNote(null);
       setNotification({ message: '會議紀錄已更新！', type: 'success' });
       setTimeout(() => setNotification(null), 2000);
@@ -906,7 +900,6 @@ export default function App() {
   const handleDeleteNote = async (id: string) => {
     try {
       await deleteDoc(doc(db, 'notes', id));
-      setNotes(prev => prev.filter(n => n.id !== id));
     } catch (err) {
       console.error("Error deleting note:", err);
     }
