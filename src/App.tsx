@@ -454,7 +454,7 @@ export default function App() {
 
   // Firestore Sync: Space Photos
   useEffect(() => {
-    if (!selectedSpace) {
+    if (!selectedSpace || activeMainTab !== 'photos') {
       setSpacePhotos([]);
       return;
     }
@@ -466,7 +466,7 @@ export default function App() {
       handleFirestoreError(error, OperationType.GET, 'photos');
     });
     return () => unsubscribe();
-  }, [selectedSpace]);
+  }, [selectedSpace, activeMainTab]);
 
   const handleAddNote = async () => {
     if (!newNote.trim() || !selectedSpace) return;
