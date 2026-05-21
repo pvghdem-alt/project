@@ -331,30 +331,30 @@ export default function App() {
   }, [chatMessages]);
 
   useEffect(() => {
-    if (activeMainTab === 'report' && cachedAllRequirements === null) {
-      const fetchAllReqs = async () => {
-        try {
-          const snapshot = await getDocs(collection(db, 'requirements'));
-          const dbReqs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as RequirementCategory[];
-          const defaults = DESIGN_SPECS.keyPoints.map((k, i) => ({ id: `default-${i}`, ...k })) as RequirementCategory[];
-          
-          const merged = [...dbReqs];
-          defaults.forEach(def => {
-            if (!dbReqs.some(d => d.title === def.title || (def.title.includes('保護室') && d.title.includes('保護室')) || (def.title.includes('護理') && d.title.includes('護理')) || (def.title.includes('病房') && d.title.includes('病房')))) {
-               merged.push(def);
-            }
-          });
-          setCachedAllRequirements(merged);
-        } catch (err) {
-          console.error("Failed to load global requirements", err);
-          setCachedAllRequirements([]);
-        }
-      };
-      fetchAllReqs();
-    } else if (activeMainTab !== 'report') {
-      setCachedAllRequirements(null);
+    let unsubscribe: (() => void) | undefined;
+    if (activeMainTab === 'report') {
+      const q = query(collection(db, 'requirements'));
+      unsubscribe = onSnapshot(q, (snapshot) => {
+        const dbReqs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as RequirementCategory[];
+        const defaults = DESIGN_SPECS.keyPoints.map((k, i) => ({ id: `default-${i}`, ...k })) as RequirementCategory[];
+        
+        const merged = [...dbReqs];
+        defaults.forEach(def => {
+          if (!dbReqs.some(d => d.title === def.title || (def.title.includes('保護室') && d.title.includes('保護室')) || (def.title.includes('護理') && d.title.includes('護理')) || (def.title.includes('病房') && d.title.includes('病房')))) {
+             merged.push(def);
+          }
+        });
+        setCachedAllRequirements(merged);
+      }, (err) => {
+        console.error("Failed to load global requirements for report", err);
+        setCachedAllRequirements([]);
+      });
     }
-  }, [activeMainTab, cachedAllRequirements]);
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, [activeMainTab]);
 
   useEffect(() => {
     setShowHistory(false);
@@ -621,103 +621,6 @@ export default function App() {
       setShowAddCheckModal(false);
     } catch (err) {
       console.error("Add check failed:", err);
-    }
-  };
-
-  const handleRunDiagnostics = async () => {
-    if (!user) return;
-    try {
-      setNotification({ message: '系統診斷中：計算各資料表實際大小...', type: 'ai' });
-      const collections = ['requirements', 'notes', 'photos', 'topics', 'checklist', 'maps'];
-      const counts: Record<string, number> = {};
-      
-      const { getCountFromServer } = await import('firebase/firestore');
-      
-      for (const colName of collections) {
-        const snapshot = await getCountFromServer(collection(db, colName));
-        counts[colName] = snapshot.data().count;
-      }
-      
-      const details = Object.entries(counts).map(([k, v]) => `${k}: ${v}`).join('\n');
-      console.log('--- 系統診斷報告 ---');
-      console.log(details);
-      
-      setNotification({ 
-        message: `系統診斷完成！(控制台查看明細)\n總計各資料表筆數：\n${details.replace(/\n/g, ', ')}`, 
-        type: 'success' 
-      });
-      setTimeout(() => setNotification(null), 10000);
-    } catch (err) {
-      console.error('診斷失敗:', err);
-      setNotification({ message: '系統診斷失敗', type: 'error' });
-    }
-  };
-
-  const handleDatabaseCleanup = async () => {
-    if (!user) return;
-    setIsCleaning(true);
-    setNotification({ message: '系統深度優化：掃描並清理各項重複及無效資料中...', type: 'ai' });
-    try {
-      let totalDeleted = 0;
-      let logs = [];
-      const collectionsToClean = [
-        { name: 'requirements', keyFn: (d: any) => `${d.title}|${d.space}` },
-        { name: 'checklist', keyFn: (d: any) => `${d.text}` },
-        { name: 'topics', keyFn: (d: any) => `${d.name}|${d.floorId}` },
-        { name: 'notes', keyFn: (d: any) => `${d.content}|${d.space}` },
-        { name: 'photos', keyFn: (d: any) => `${d.url?.substring(0,20)}|${d.space}` },
-      ];
-
-      let currentBatch = writeBatch(db);
-      let operationsInBatch = 0;
-      const batches = [currentBatch];
-
-      for (const col of collectionsToClean) {
-        const snapshot = await getDocs(collection(db, col.name));
-        const seen = new Set<string>();
-        let deletedInCol = 0;
-
-        snapshot.docs.forEach((docSnap) => {
-          const data = docSnap.data();
-          
-          // Generate unique key
-          const key = col.keyFn(data);
-          
-          // Additional custom rules for completely invalid data
-          const isInvalidReq = col.name === 'requirements' && !data.space && !data.title?.includes('B3F') && !data.title?.includes('B5F') && !data.title?.includes('病房') && !data.title?.includes('保護室');
-          
-          if (seen.has(key) || isInvalidReq) {
-            currentBatch.delete(docSnap.ref);
-            deletedInCol++;
-            totalDeleted++;
-            operationsInBatch++;
-            
-            if (operationsInBatch === 490) {
-              currentBatch = writeBatch(db);
-              batches.push(currentBatch);
-              operationsInBatch = 0;
-            }
-          } else {
-            if (key !== 'undefined|undefined' && key !== 'undefined') {
-               seen.add(key);
-            }
-          }
-        });
-        logs.push(`${col.name}: 刪除 ${deletedInCol} 筆`);
-      }
-
-      for (const b of batches) {
-        await b.commit();
-      }
-
-      console.log('Cleanup results:', logs);
-      setNotification({ message: `深度優化完成！共清理了 ${totalDeleted} 筆重複或無效資料。\n(${logs.join(', ')})`, type: 'success' });
-    } catch (err) {
-      console.error(err);
-      setNotification({ message: '優化失敗，請查看控制台日誌', type: 'error' });
-    } finally {
-      setIsCleaning(false);
-      setTimeout(() => setNotification(null), 8000);
     }
   };
 
@@ -1689,25 +1592,6 @@ export default function App() {
             {sidebarOpen && <span className="text-sm font-bold uppercase tracking-widest">需求彙整報表</span>}
           </button>
           
-          <div className="grid grid-cols-2 gap-2">
-            <button 
-              onClick={handleDatabaseCleanup}
-              disabled={isCleaning}
-              className={`w-full flex items-center justify-center gap-2 p-2 rounded-xl transition-all bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 disabled:opacity-50`}
-            >
-              {isCleaning ? <Loader2 size={16} className="animate-spin" /> : <ShieldAlert size={16} />}
-              {sidebarOpen && <span className="text-xs font-bold uppercase tracking-widest">{isCleaning ? '清理...' : '優化'}</span>}
-            </button>
-
-            <button 
-              onClick={handleRunDiagnostics}
-              className={`w-full flex items-center justify-center gap-2 p-2 rounded-xl transition-all bg-amber-50 text-amber-600 border border-amber-200 hover:bg-amber-100`}
-            >
-              <Activity size={16} />
-              {sidebarOpen && <span className="text-xs font-bold uppercase tracking-widest">診斷</span>}
-            </button>
-          </div>
-
           <button 
             onClick={() => setShowApiModal(true)}
             className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all ${isApiKeySet ? 'bg-blue-500/10 text-blue-600 border border-blue-500/30' : 'bg-black/5 text-slate-500 border border-transparent hover:bg-black/10'} ${!sidebarOpen && 'justify-center'}`}
