@@ -296,26 +296,32 @@ export default function App() {
 
   // Firestore Sync: Requirements
   useEffect(() => {
-    const q = collection(db, 'requirements');
+    if (!selectedSpace) {
+      const defaults = DESIGN_SPECS.keyPoints.map((k, i) => ({ id: `default-${i}`, ...k })) as RequirementCategory[];
+      setRequirements(defaults);
+      return;
+    }
+
+    const q = query(
+      collection(db, 'requirements'),
+      where('space', '==', selectedSpace)
+    );
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as RequirementCategory[];
-      const defaults = DESIGN_SPECS.keyPoints.map((k, i) => ({ id: `default-${i}`, ...k }));
-      if (data.length > 0) {
-        const merged = [...data];
-        defaults.forEach(def => {
-          if (!data.some(d => d.title === def.title || (def.title.includes('保護室') && d.title.includes('保護室')) || (def.title.includes('護理') && d.title.includes('護理')) || (def.title.includes('病房') && d.title.includes('病房')))) {
-             merged.push(def);
-          }
-        });
-        setRequirements(merged);
-      } else {
-        setRequirements(defaults);
-      }
+      const defaults = DESIGN_SPECS.keyPoints.map((k, i) => ({ id: `default-${i}`, ...k })) as RequirementCategory[];
+      
+      const merged = [...data];
+      defaults.forEach(def => {
+        if (!data.some(d => d.title === def.title || (def.title.includes('保護室') && d.title.includes('保護室')) || (def.title.includes('護理') && d.title.includes('護理')) || (def.title.includes('病房') && d.title.includes('病房')))) {
+           merged.push(def);
+        }
+      });
+      setRequirements(merged);
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, 'requirements');
     });
     return () => unsubscribe();
-  }, []);
+  }, [selectedSpace]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -581,7 +587,7 @@ export default function App() {
           // Add new
           cleanedData.forEach(r => {
             const ref = doc(collection(db, 'requirements'));
-            batch.set(ref, { ...r, updatedAt: serverTimestamp() });
+            batch.set(ref, { ...r, space: selectedSpace, updatedAt: serverTimestamp() });
           });
         } else {
           // Delete old
@@ -1675,7 +1681,7 @@ export default function App() {
             <div className="flex-1 flex overflow-hidden gap-6 lg:gap-8">
               <div className="flex-1 glass-panel rounded-3xl overflow-hidden shadow-2xl border border-white/40 relative flex flex-col">
                 {activeMainTab === 'report' ? (
-                  <ReportView projectMaps={projectMaps} customTopics={customTopics} requirements={requirements} />
+                  <ReportView projectMaps={projectMaps} customTopics={customTopics} />
                 ) : activeMainTab === 'map' ? (
                   <div className="flex-1 relative overflow-hidden flex flex-col">
                     <div className="p-4 border-b border-slate-100 bg-white/50 backdrop-blur-md flex justify-between items-center z-10 shrink-0">
@@ -2499,9 +2505,47 @@ export default function App() {
   );
 }
 
-function ReportView({ projectMaps, customTopics, requirements }: { projectMaps: ProjectMap[], customTopics: Topic[], requirements: RequirementCategory[] }) {
+function ReportView({ projectMaps, customTopics }: { projectMaps: ProjectMap[], customTopics: Topic[] }) {
+  const [allRequirements, setAllRequirements] = useState<RequirementCategory[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchAllReqs = async () => {
+      try {
+        setIsLoading(true);
+        const snapshot = await getDocs(collection(db, 'requirements'));
+        const dbReqs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as RequirementCategory[];
+        const defaults = DESIGN_SPECS.keyPoints.map((k, i) => ({ id: `default-${i}`, ...k })) as RequirementCategory[];
+        
+        const merged = [...dbReqs];
+        defaults.forEach(def => {
+          if (!dbReqs.some(d => d.title === def.title || (def.title.includes('保護室') && d.title.includes('保護室')) || (def.title.includes('護理') && d.title.includes('護理')) || (def.title.includes('病房') && d.title.includes('病房')))) {
+             merged.push(def);
+          }
+        });
+        setAllRequirements(merged);
+      } catch (err) {
+        console.error("Failed to load global requirements", err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    fetchAllReqs();
+  }, []);
+
   const globalTrades = customTopics.filter(t => t.type === 'trade');
   
+  if (isLoading) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-slate-50">
+        <div className="flex flex-col items-center gap-4 text-slate-500">
+          <Loader2 size={32} className="animate-spin text-blue-500" />
+          <p className="font-bold tracking-widest uppercase">載入完整報告中...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex-1 overflow-y-auto custom-scrollbar bg-slate-50 text-slate-800 p-8">
       <div className="max-w-5xl mx-auto space-y-12">
@@ -2523,7 +2567,7 @@ function ReportView({ projectMaps, customTopics, requirements }: { projectMaps: 
               
               <div className="space-y-8 pl-4 lg:pl-8">
                 {floorSpaces.map(space => {
-                  const reqs = requirements.filter(r => r.space === space.name || (!r.space && (r.title === space.name || r.title.includes(space.name))));
+                  const reqs = allRequirements.filter(r => r.space === space.name || (!r.space && (r.title === space.name || r.title.includes(space.name))));
                   if (reqs.length === 0) return null;
                   
                   return (
@@ -2560,7 +2604,7 @@ function ReportView({ projectMaps, customTopics, requirements }: { projectMaps: 
             
             <div className="space-y-8 pl-4 lg:pl-8">
               {globalTrades.map(trade => {
-                const reqs = requirements.filter(r => r.space === trade.name || (!r.space && (r.title === trade.name || r.title.includes(trade.name))));
+                const reqs = allRequirements.filter(r => r.space === trade.name || (!r.space && (r.title === trade.name || r.title.includes(trade.name))));
                 if (reqs.length === 0) return null;
                 
                 return (
