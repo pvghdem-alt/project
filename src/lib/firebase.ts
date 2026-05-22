@@ -9,9 +9,11 @@ import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager
 import firebaseConfig from '../../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
+const dbId = (firebaseConfig as any).firestoreDatabaseId || "ai-studio-f2272555-86d5-4aaa-8656-a1edcd2c0b6d";
+
 export const db = initializeFirestore(app, {
   localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
-}, (firebaseConfig as any).firestoreDatabaseId);
+}, dbId);
 export const auth = getAuth();
 
 export const logout = () => auth.signOut();
