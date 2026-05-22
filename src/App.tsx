@@ -310,6 +310,31 @@ export default function App() {
     }
   }, [user, activeMainTab]);
 
+  // Handle keyboard events in Lightbox Modal for left/right/escapes
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!selectedLightboxPhoto) return;
+      if (e.key === 'ArrowLeft') {
+        const currentIndex = spacePhotos.findIndex(p => p.url === selectedLightboxPhoto);
+        if (currentIndex > -1 && spacePhotos.length > 0) {
+          const nextIndex = (currentIndex - 1 + spacePhotos.length) % spacePhotos.length;
+          setSelectedLightboxPhoto(spacePhotos[nextIndex].url);
+        }
+      } else if (e.key === 'ArrowRight') {
+        const currentIndex = spacePhotos.findIndex(p => p.url === selectedLightboxPhoto);
+        if (currentIndex > -1 && spacePhotos.length > 0) {
+          const nextIndex = (currentIndex + 1) % spacePhotos.length;
+          setSelectedLightboxPhoto(spacePhotos[nextIndex].url);
+        }
+      } else if (e.key === 'Escape') {
+        setSelectedLightboxPhoto(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedLightboxPhoto, spacePhotos]);
+
   // Initializing active floor if data exists
   useEffect(() => {
     if (projectMaps.length > 0 && !projectMaps.find(m => m.id === activeFloor)) {
@@ -3088,29 +3113,79 @@ export default function App() {
         {selectedLightboxPhoto && (
           <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
             <motion.div 
-              initial={{ opacity: 0 }} 
-              animate={{ opacity: 1 }} 
-              exit={{ opacity: 0 }} 
-              onClick={() => setSelectedLightboxPhoto(null)} 
-              className="absolute inset-0 bg-slate-950/90 backdrop-blur-sm" 
+               initial={{ opacity: 0 }} 
+               animate={{ opacity: 1 }} 
+               exit={{ opacity: 0 }} 
+               onClick={() => setSelectedLightboxPhoto(null)} 
+               className="absolute inset-0 bg-slate-950/90 backdrop-blur-sm" 
             />
             <motion.div 
-              initial={{ opacity: 0, scale: 0.9 }} 
-              animate={{ opacity: 1, scale: 1 }} 
-              exit={{ opacity: 0, scale: 0.9 }} 
-              className="relative max-w-5xl max-h-[90vh] w-full"
+               initial={{ opacity: 0, scale: 0.9 }} 
+               animate={{ opacity: 1, scale: 1 }} 
+               exit={{ opacity: 0, scale: 0.9 }} 
+               className="relative max-w-5xl max-h-[90vh] w-full flex flex-col items-center justify-center"
             >
-              <button 
-                onClick={() => setSelectedLightboxPhoto(null)}
-                className="absolute -top-12 right-0 p-2 text-white/70 hover:text-white transition-colors bg-white/10 rounded-full hover:bg-white/20"
-              >
-                <X size={24} />
-              </button>
-              <img 
-                src={selectedLightboxPhoto} 
-                alt="Enlarged space view" 
-                className="w-full h-full object-contain rounded-2xl shadow-2xl"
-              />
+               <button 
+                 onClick={() => setSelectedLightboxPhoto(null)}
+                 className="absolute -top-12 right-0 p-2 text-white/70 hover:text-white transition-colors bg-white/10 rounded-full hover:bg-white/20"
+               >
+                 <X size={24} />
+               </button>
+               
+               <div className="relative w-full flex items-center justify-center group">
+                 {/* Navigation Buttons */}
+                 {spacePhotos.length > 1 && (
+                   <>
+                     <button 
+                       onClick={(e) => {
+                         e.stopPropagation();
+                         const currentIndex = spacePhotos.findIndex(p => p.url === selectedLightboxPhoto);
+                         if (currentIndex > -1 && spacePhotos.length > 0) {
+                           const nextIndex = (currentIndex - 1 + spacePhotos.length) % spacePhotos.length;
+                           setSelectedLightboxPhoto(spacePhotos[nextIndex].url);
+                         }
+                       }}
+                       className="absolute left-4 md:left-6 p-3 text-white bg-slate-950/70 hover:bg-slate-950 hover:scale-105 transition-all border border-white/10 rounded-full shadow-2xl z-20 hover:text-blue-400 active:scale-95"
+                       title="上一張"
+                     >
+                       <ChevronLeft size={24} />
+                     </button>
+                     
+                     <button 
+                       onClick={(e) => {
+                         e.stopPropagation();
+                         const currentIndex = spacePhotos.findIndex(p => p.url === selectedLightboxPhoto);
+                         if (currentIndex > -1 && spacePhotos.length > 0) {
+                           const nextIndex = (currentIndex + 1) % spacePhotos.length;
+                           setSelectedLightboxPhoto(spacePhotos[nextIndex].url);
+                         }
+                       }}
+                       className="absolute right-4 md:right-6 p-3 text-white bg-slate-950/70 hover:bg-slate-950 hover:scale-105 transition-all border border-white/10 rounded-full shadow-2xl z-20 hover:text-blue-400 active:scale-95"
+                       title="下一張"
+                     >
+                       <ChevronRight size={24} />
+                     </button>
+                   </>
+                 )}
+
+                 <img 
+                   src={selectedLightboxPhoto} 
+                   alt="Enlarged space view" 
+                   className="max-h-[80vh] max-w-full object-contain rounded-2xl shadow-2xl border border-white/5"
+                 />
+               </div>
+
+               {/* Indicator badge */}
+               {spacePhotos.length > 0 && spacePhotos.findIndex(p => p.url === selectedLightboxPhoto) > -1 && (
+                 <div className="mt-4 text-white/90 bg-slate-950/80 px-4 py-2 rounded-full border border-white/10 tracking-widest text-xs font-black shadow-xl flex items-center gap-2">
+                   <span>照片</span>
+                   <span className="text-blue-400">
+                     {spacePhotos.findIndex(p => p.url === selectedLightboxPhoto) + 1}
+                   </span>
+                   <span className="opacity-40">/</span>
+                   <span>{spacePhotos.length}</span>
+                 </div>
+               )}
             </motion.div>
           </div>
         )}
