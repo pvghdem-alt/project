@@ -303,6 +303,13 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  // Guarantee only jason2134@gmail.com can view the report tab
+  useEffect(() => {
+    if (activeMainTab === 'report' && user?.email !== 'jason2134@gmail.com') {
+      setActiveMainTab('discussion');
+    }
+  }, [user, activeMainTab]);
+
   // Initializing active floor if data exists
   useEffect(() => {
     if (projectMaps.length > 0 && !projectMaps.find(m => m.id === activeFloor)) {
@@ -1910,13 +1917,15 @@ export default function App() {
         </nav>
 
         <div className="p-4 border-t border-slate-200 space-y-4">
-          <button 
-            onClick={() => { setActiveMainTab('report'); setSelectedSpace(null); setSidebarMode('root'); }}
-            className={`w-full flex items-center gap-3 p-3 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 transition-all ${!sidebarOpen && 'justify-center'}`}
-          >
-            <FileText size={18} />
-            {sidebarOpen && <span className="text-sm font-bold uppercase tracking-widest">需求彙整報表</span>}
-          </button>
+          {user?.email === 'jason2134@gmail.com' && (
+            <button 
+              onClick={() => { setActiveMainTab('report'); setSelectedSpace(null); setSidebarMode('root'); }}
+              className={`w-full flex items-center gap-3 p-3 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 transition-all ${!sidebarOpen && 'justify-center'}`}
+            >
+              <FileText size={18} />
+              {sidebarOpen && <span className="text-sm font-bold uppercase tracking-widest">需求彙整報表</span>}
+            </button>
+          )}
           
           <button 
             onClick={() => setShowApiModal(true)}
