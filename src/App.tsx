@@ -855,15 +855,31 @@ export default function App() {
     }
   };
 
-  const getOrCreateFolder = async (token: string) => {
-    const folderName = "護理病房智慧空間規劃_照片";
-    try {
-      const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=name='${encodeURIComponent(folderName)}'+and+mimeType='application/vnd.google-apps.folder'+and+trashed=false`, {
+  const getOrCreateFolder = async (token: string, floorName: string, spaceName: string) => {
+    const rootFolderName = "B棟3F、5F改建工程細部設計需求照片";
+    
+    const findOrCreateSubfolder = async (name: string, parentId?: string) => {
+      let queryStr = `name='${name.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+      if (parentId) {
+        queryStr += ` and '${parentId}' in parents`;
+      } else {
+        queryStr += ` and 'root' in parents`;
+      }
+      
+      const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(queryStr)}&fields=files(id,name)`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const searchData = await searchRes.json();
       if (searchData.files && searchData.files.length > 0) {
         return searchData.files[0].id;
+      }
+      
+      const body: any = {
+        name,
+        mimeType: 'application/vnd.google-apps.folder'
+      };
+      if (parentId) {
+        body.parents = [parentId];
       }
       
       const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
@@ -872,14 +888,17 @@ export default function App() {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          name: folderName,
-          mimeType: 'application/vnd.google-apps.folder'
-        })
+        body: JSON.stringify(body)
       });
+      
+      if (!createRes.ok) {
+        const errText = await createRes.text();
+        throw new Error(`建立資料夾 '${name}' 失敗: ${errText}`);
+      }
+      
       const createData = await createRes.json();
       const folderId = createData.id;
-
+      
       try {
         await fetch(`https://www.googleapis.com/drive/v3/files/${folderId}/permissions`, {
           method: 'POST',
@@ -893,12 +912,23 @@ export default function App() {
           })
         });
       } catch (err) {
-        console.warn("Could not set folder permissions:", err);
+        console.warn(`Could not set permissions for folder '${name}':`, err);
       }
-
+      
       return folderId;
+    };
+
+    try {
+      // 第一層：B棟3F、5F改建工程細部設計需求照片
+      const rootFolderId = await findOrCreateSubfolder(rootFolderName);
+      // 第二層：B棟3F 或 B棟5F 等
+      const floorFolderId = await findOrCreateSubfolder(floorName, rootFolderId);
+      // 第三層：具體空間名稱 (如：護理站)
+      const spaceFolderId = await findOrCreateSubfolder(spaceName, floorFolderId);
+      
+      return spaceFolderId;
     } catch (err) {
-      console.error("Failed to solve folder creation/search:", err);
+      console.error("Failed to solve nested folder creation/search on Drive:", err);
       throw err;
     }
   };
@@ -962,7 +992,14 @@ export default function App() {
     setNotification({ message: '正在建立雲端硬碟照片目錄...', type: 'ai' });
 
     try {
-      const folderId = await getOrCreateFolder(driveAccessToken);
+      let floorFolderName = activeMap?.name || activeFloor || "其他樓層";
+      if (floorFolderName.includes('B3F') || floorFolderName.includes('3F')) {
+        floorFolderName = "B棟3F";
+      } else if (floorFolderName.includes('B5F') || floorFolderName.includes('5F')) {
+        floorFolderName = "B棟5F";
+      }
+      
+      const folderId = await getOrCreateFolder(driveAccessToken, floorFolderName, selectedSpace);
 
       const options = {
         maxSizeMB: 1.5,
