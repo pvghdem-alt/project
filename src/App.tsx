@@ -48,7 +48,7 @@ import imageCompression from 'browser-image-compression';
 import { DESIGN_SPECS } from './constants';
 import { askAiAssistant, setCustomApiKey, analyzeNotesToRequirements, deduplicateData, analyzeFileToSpecs } from './geminiService';
 import { db, auth } from './lib/firebase';
-import { signInWithEmailAndPassword, onAuthStateChanged, User } from 'firebase/auth';
+import { signInWithEmailAndPassword, onAuthStateChanged, User, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { 
   collection, 
   query, 
@@ -140,6 +140,7 @@ interface Note {
   timestamp: string;
   status: 'pending' | 'confirmed';
   authorEmail?: string | null;
+  createdAt?: any;
 }
 
 interface ChatMessage {
@@ -166,10 +167,11 @@ interface Topic {
 interface SpacePhoto {
   id: string;
   space: string;
-  url: string; // Base64 compressed
+  url: string; // Base64 compressed or Google Drive link
   description?: string;
   createdAt: any;
   authorId: string;
+  driveFileId?: string;
 }
 
 function getRequirementsForSpace(reqs: RequirementCategory[], space: string | null) {
@@ -216,6 +218,10 @@ export default function App() {
     }
   }, []);
   const [showApiModal, setShowApiModal] = useState(false);
+
+  // Google Drive state
+  const [driveAccessToken, setDriveAccessToken] = useState<string | null>(null);
+  const [isDriveConnecting, setIsDriveConnecting] = useState(false);
 
   // Chat state
   const [chatInput, setChatInput] = useState('');
@@ -265,6 +271,9 @@ export default function App() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
+      if (!u) {
+        setDriveAccessToken(null);
+      }
     });
     return () => unsubscribe();
   }, []);
@@ -846,6 +855,79 @@ export default function App() {
     }
   };
 
+  const getOrCreateFolder = async (token: string) => {
+    const folderName = "護理病房智慧空間規劃_照片";
+    try {
+      const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=name='${encodeURIComponent(folderName)}'+and+mimeType='application/vnd.google-apps.folder'+and+trashed=false`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const searchData = await searchRes.json();
+      if (searchData.files && searchData.files.length > 0) {
+        return searchData.files[0].id;
+      }
+      
+      const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          name: folderName,
+          mimeType: 'application/vnd.google-apps.folder'
+        })
+      });
+      const createData = await createRes.json();
+      const folderId = createData.id;
+
+      try {
+        await fetch(`https://www.googleapis.com/drive/v3/files/${folderId}/permissions`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            role: 'reader',
+            type: 'anyone'
+          })
+        });
+      } catch (err) {
+        console.warn("Could not set folder permissions:", err);
+      }
+
+      return folderId;
+    } catch (err) {
+      console.error("Failed to solve folder creation/search:", err);
+      throw err;
+    }
+  };
+
+  const handleConnectGoogleDrive = async () => {
+    setIsDriveConnecting(true);
+    setNotification({ message: '正在開啟 Google 登入視窗以連結雲端硬碟...', type: 'ai' });
+    try {
+      const provider = new GoogleAuthProvider();
+      provider.addScope('https://www.googleapis.com/auth/drive.file');
+      
+      const result = await signInWithPopup(auth, provider);
+      const credential = GoogleAuthProvider.credentialFromResult(result);
+      if (!credential?.accessToken) {
+        throw new Error('無法取得 Google Drive 存取權杖');
+      }
+      
+      setDriveAccessToken(credential.accessToken);
+      setNotification({ message: '成功連結 Google Drive！現在您可以上傳高清照片，空間照片將直接存入您的雲端硬碟。', type: 'success' });
+      setTimeout(() => setNotification(null), 4000);
+    } catch (err: any) {
+      console.error(err);
+      setNotification({ message: `連結 Google Drive 失敗: ${err.message || '未知錯誤'}`, type: 'error' });
+      setTimeout(() => setNotification(null), 4000);
+    } finally {
+      setIsDriveConnecting(false);
+    }
+  };
+
   const handlePhotoUpload = async (event: React.ChangeEvent<HTMLInputElement> | ClipboardEvent) => {
     let files: FileList | File[] | null = null;
     
@@ -866,43 +948,109 @@ export default function App() {
     }
 
     if (!files || files.length === 0 || !selectedSpace) return;
+
+    if (!driveAccessToken) {
+      setNotification({ message: '請先點擊「連結 Google 雲端硬碟」以進行照片上傳。', type: 'error' });
+      setTimeout(() => setNotification(null), 4000);
+      if (!(event instanceof ClipboardEvent) && photoInputRef.current) {
+        photoInputRef.current.value = '';
+      }
+      return;
+    }
     
     setIsUploadingPhoto(true);
-    setNotification({ message: '正在壓縮並上傳照片...', type: 'ai' });
+    setNotification({ message: '正在建立雲端硬碟照片目錄...', type: 'ai' });
 
     try {
+      const folderId = await getOrCreateFolder(driveAccessToken);
+
       const options = {
-        maxSizeMB: 0.15, // Compressing to ~150KB to fit in Firestore safely
-        maxWidthOrHeight: 1280,
+        maxSizeMB: 1.5,
+        maxWidthOrHeight: 2048,
         useWebWorker: true
       };
 
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        const compressedFile = await imageCompression(file, options);
-        
-        const reader = new FileReader();
-        const base64Promise = new Promise<string>((resolve) => {
-          reader.onload = () => resolve(reader.result as string);
-          reader.readAsDataURL(compressedFile);
+        setNotification({ message: `正在優化並上傳照片 (${i + 1}/${files.length})...`, type: 'ai' });
+
+        let fileToUpload: File | Blob = file;
+        try {
+          fileToUpload = await imageCompression(file, options);
+        } catch (e) {
+          console.warn("Compression skipped:", e);
+        }
+
+        const filename = `${selectedSpace}_${new Date().toISOString().replace(/[:.]/g, '-')}_${i}.${file.name.split('.').pop() || 'jpg'}`;
+
+        const metaResponse = await fetch('https://www.googleapis.com/drive/v3/files', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${driveAccessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            name: filename,
+            mimeType: file.type,
+            parents: [folderId]
+          })
         });
-        
-        const base64 = await base64Promise;
-        
+
+        if (!metaResponse.ok) {
+          const errText = await metaResponse.text();
+          throw new Error(`建立雲端檔案紀錄失敗: ${errText}`);
+        }
+
+        const fileData = await metaResponse.json();
+        const fileId = fileData.id;
+
+        const mediaResponse = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
+          method: 'PATCH',
+          headers: {
+            'Authorization': `Bearer ${driveAccessToken}`,
+            'Content-Type': file.type
+          },
+          body: fileToUpload
+        });
+
+        if (!mediaResponse.ok) {
+          const errText = await mediaResponse.text();
+          throw new Error(`上傳照片內容失敗: ${errText}`);
+        }
+
+        try {
+          await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${driveAccessToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              role: 'reader',
+              type: 'anyone'
+            })
+          });
+        } catch (permsErr) {
+          console.warn("Could not share file permissions:", permsErr);
+        }
+
+        const publicUrl = `https://drive.google.com/thumbnail?id=${fileId}&sz=w1280`;
+
         await addDoc(collection(db, 'photos'), {
           space: selectedSpace,
-          url: base64,
+          url: publicUrl,
+          driveFileId: fileId,
           createdAt: serverTimestamp(),
           authorId: user?.uid || 'guest'
         });
       }
 
-      setNotification({ message: `成功上傳 ${files.length} 張照片`, type: 'success' });
+      setNotification({ message: `成功上傳 ${files.length} 張照片至 Google Drive！`, type: 'success' });
       setTimeout(() => setNotification(null), 3000);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setNotification({ message: '照片上傳失敗', type: 'error' });
-      setTimeout(() => setNotification(null), 3000);
+      setNotification({ message: `照片上傳失敗: ${err.message || '未知錯誤'}`, type: 'error' });
+      setTimeout(() => setNotification(null), 4000);
     } finally {
       setIsUploadingPhoto(false);
       if (!(event instanceof ClipboardEvent) && photoInputRef.current) {
@@ -913,7 +1061,6 @@ export default function App() {
 
   useEffect(() => {
     const handleGlobalPaste = (e: ClipboardEvent) => {
-      // Only handle paste if we have a selected space and not currently focusing a textarea/input
       const target = e.target as HTMLElement;
       const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';
       if (selectedSpace && !isInput) {
@@ -922,11 +1069,29 @@ export default function App() {
     };
     window.addEventListener('paste', handleGlobalPaste);
     return () => window.removeEventListener('paste', handleGlobalPaste);
-  }, [selectedSpace, user]);
+  }, [selectedSpace, user, driveAccessToken]);
 
   const handleDeletePhoto = async (id: string) => {
     if (!user) return;
+    const confirmed = window.confirm("確定要刪除這張照片嗎？");
+    if (!confirmed) return;
+
     try {
+      const photoDoc = spacePhotos.find(p => p.id === id);
+      if (photoDoc && photoDoc.driveFileId && driveAccessToken) {
+        try {
+          await fetch(`https://www.googleapis.com/drive/v3/files/${photoDoc.driveFileId}`, {
+            method: 'DELETE',
+            headers: {
+              'Authorization': `Bearer ${driveAccessToken}`
+            }
+          });
+          console.log("Deleted from Google Drive:", photoDoc.driveFileId);
+        } catch (driveErr) {
+          console.error("Failed to delete from Google Drive:", driveErr);
+        }
+      }
+
       await deleteDoc(doc(db, 'photos', id));
       setNotification({ message: '照片已刪除', type: 'success' });
       setTimeout(() => setNotification(null), 2000);
@@ -1817,14 +1982,33 @@ export default function App() {
                                 <ImageIcon size={18} className="text-blue-500" /> 空間現況/示意照片
                               </h4>
                               {user && !isNursingDept && (
-                                <button 
-                                  onClick={() => photoInputRef.current?.click()}
-                                  disabled={isUploadingPhoto}
-                                  className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-slate-800 transition-all shadow-md active:scale-95 disabled:opacity-50"
-                                >
-                                  {isUploadingPhoto ? <Loader2 size={14} className="animate-spin" /> : <Camera size={14} />}
-                                  上傳照片
-                                </button>
+                                <div className="flex items-center gap-2">
+                                  {!driveAccessToken ? (
+                                    <button 
+                                      onClick={handleConnectGoogleDrive}
+                                      disabled={isDriveConnecting}
+                                      className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-all shadow-md active:scale-95 disabled:opacity-50"
+                                    >
+                                      {isDriveConnecting ? <Loader2 size={14} className="animate-spin" /> : <UploadCloud size={14} />}
+                                      連結 Google 雲端硬碟
+                                    </button>
+                                  ) : (
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-[10px] text-green-600 bg-green-50 px-2.5 py-1.5 rounded-lg border border-green-200 font-black tracking-normal flex items-center gap-1 shrink-0">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
+                                        已連結雲端硬碟
+                                      </span>
+                                      <button 
+                                        onClick={() => photoInputRef.current?.click()}
+                                        disabled={isUploadingPhoto}
+                                        className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-slate-800 transition-all shadow-md active:scale-95 disabled:opacity-50"
+                                      >
+                                        {isUploadingPhoto ? <Loader2 size={14} className="animate-spin" /> : <Camera size={14} />}
+                                        上傳照片
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
                               )}
                               <input 
                                 type="file"
