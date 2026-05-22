@@ -40,7 +40,8 @@ import {
   ChevronDown,
   ChevronLeft,
   Camera,
-  UploadCloud
+  UploadCloud,
+  Settings
 } from 'lucide-react';
 import { motion, AnimatePresence, Reorder } from 'motion/react';
 import Markdown from 'react-markdown';
@@ -218,10 +219,27 @@ export default function App() {
     }
   }, []);
   const [showApiModal, setShowApiModal] = useState(false);
+  const [activeSettingsTab, setActiveSettingsTab] = useState<'gemini' | 'gdrive'>('gemini');
 
   // Google Drive state
+  const [googleClientId, setGoogleClientId] = useState(() => {
+    return localStorage.getItem('google_client_id') || '76552910163-7bng5hj1k2k5c9jr48li4ha0jk53q2nk.apps.googleusercontent.com';
+  });
   const [driveAccessToken, setDriveAccessToken] = useState<string | null>(null);
   const [isDriveConnecting, setIsDriveConnecting] = useState(false);
+
+  useEffect(() => {
+    const savedToken = localStorage.getItem('drive_access_token');
+    const savedExpiresAt = localStorage.getItem('drive_token_expires_at');
+    if (savedToken && savedExpiresAt) {
+      if (Date.now() < Number(savedExpiresAt)) {
+        setDriveAccessToken(savedToken);
+      } else {
+        localStorage.removeItem('drive_access_token');
+        localStorage.removeItem('drive_token_expires_at');
+      }
+    }
+  }, []);
 
   // Chat state
   const [chatInput, setChatInput] = useState('');
@@ -933,61 +951,92 @@ export default function App() {
     }
   };
 
-  const handleConnectGoogleDrive = async () => {
+  const initiateGoogleOAuth = (onSuccessCallback?: (token: string) => void) => {
     setIsDriveConnecting(true);
-    setNotification({ message: '正在開啟 Google 登入視窗以連結雲端硬碟...', type: 'ai' });
+    setNotification({ message: '正在開啟 Google 驗證視窗以儲存權限...', type: 'ai' });
+    
     try {
-      const provider = new GoogleAuthProvider();
-      provider.addScope('https://www.googleapis.com/auth/drive.file');
-      
-      const result = await signInWithPopup(auth, provider);
-      const credential = GoogleAuthProvider.credentialFromResult(result);
-      if (!credential?.accessToken) {
-        throw new Error('無法取得 Google Drive 存取權杖');
+      if (typeof window !== 'undefined' && (window as any).google?.accounts?.oauth2) {
+        const client = (window as any).google.accounts.oauth2.initTokenClient({
+          client_id: googleClientId.trim(),
+          scope: 'https://www.googleapis.com/auth/drive.file',
+          callback: (tokenResponse: any) => {
+            setIsDriveConnecting(false);
+            if (tokenResponse && tokenResponse.access_token) {
+              const token = tokenResponse.access_token;
+              const expiresAt = Date.now() + (Number(tokenResponse.expires_in) * 1000);
+              
+              setDriveAccessToken(token);
+              localStorage.setItem('drive_access_token', token);
+              localStorage.setItem('drive_token_expires_at', expiresAt.toString());
+              
+              setNotification({ message: '成功連結 Google 雲端硬碟！熱連線已就緒。', type: 'success' });
+              setTimeout(() => setNotification(null), 3000);
+              
+              if (onSuccessCallback) {
+                onSuccessCallback(token);
+              }
+            } else {
+              setNotification({ message: '驗證失敗：未取得存取權杖。請確認 Client ID 與授權來源設定。', type: 'error' });
+              setTimeout(() => setNotification(null), 5000);
+            }
+          },
+          error_callback: (err: any) => {
+            setIsDriveConnecting(false);
+            console.error("GIS Error:", err);
+            setNotification({ message: `驗證失敗: ${err.message || '請確認 Client ID 密鑰與來源站點。'}`, type: 'error' });
+            setTimeout(() => setNotification(null), 5000);
+          }
+        });
+        client.requestAccessToken();
+      } else {
+        // Dynamic loading fallback
+        const script = document.createElement('script');
+        script.src = 'https://accounts.google.com/gsi/client';
+        script.onload = () => {
+          initiateGoogleOAuth(onSuccessCallback);
+        };
+        script.onerror = () => {
+          setIsDriveConnecting(false);
+          // Standard Firebase popup login fallback
+          const provider = new GoogleAuthProvider();
+          provider.addScope('https://www.googleapis.com/auth/drive.file');
+          signInWithPopup(auth, provider).then((result) => {
+            const credential = GoogleAuthProvider.credentialFromResult(result);
+            if (credential?.accessToken) {
+              const token = credential.accessToken;
+              const expiresAt = Date.now() + 3600 * 1000;
+              setDriveAccessToken(token);
+              localStorage.setItem('drive_access_token', token);
+              localStorage.setItem('drive_token_expires_at', expiresAt.toString());
+              setNotification({ message: '成功連結 Google Drive！', type: 'success' });
+              setTimeout(() => setNotification(null), 4000);
+              if (onSuccessCallback) onSuccessCallback(token);
+            } else {
+              setNotification({ message: '驗證失敗：無法登入取得雲端硬碟權杖', type: 'error' });
+              setTimeout(() => setNotification(null), 4000);
+            }
+          }).catch((error) => {
+            console.error("Firebase popup fallback failed:", error);
+            setNotification({ message: '自動連結失敗：瀏覽器封鎖了快顯視窗，請重新載入此頁面或啟用快顯。', type: 'error' });
+            setTimeout(() => setNotification(null), 6000);
+          });
+        };
+        document.body.appendChild(script);
       }
-      
-      setDriveAccessToken(credential.accessToken);
-      setNotification({ message: '成功連結 Google Drive！現在您可以上傳高清照片，空間照片將直接存入您的雲端硬碟。', type: 'success' });
-      setTimeout(() => setNotification(null), 4000);
-    } catch (err: any) {
-      console.error(err);
-      setNotification({ message: `連結 Google Drive 失敗: ${err.message || '未知錯誤'}`, type: 'error' });
-      setTimeout(() => setNotification(null), 4000);
-    } finally {
+    } catch (e: any) {
+      console.error(e);
       setIsDriveConnecting(false);
+      setNotification({ message: `啟動 Google 驗證失敗: ${e.message || '未知錯誤'}`, type: 'error' });
+      setTimeout(() => setNotification(null), 4000);
     }
   };
 
-  const handlePhotoUpload = async (event: React.ChangeEvent<HTMLInputElement> | ClipboardEvent) => {
-    let files: FileList | File[] | null = null;
-    
-    if (event instanceof ClipboardEvent) {
-      const items = event.clipboardData?.items;
-      if (!items) return;
-      const imageFiles: File[] = [];
-      for (let i = 0; i < items.length; i++) {
-        if (items[i].type.indexOf('image') !== -1) {
-          const file = items[i].getAsFile();
-          if (file) imageFiles.push(file);
-        }
-      }
-      if (imageFiles.length === 0) return;
-      files = imageFiles;
-    } else {
-      files = event.target.files;
-    }
+  const handleConnectGoogleDrive = async () => {
+    initiateGoogleOAuth();
+  };
 
-    if (!files || files.length === 0 || !selectedSpace) return;
-
-    if (!driveAccessToken) {
-      setNotification({ message: '請先點擊「連結 Google 雲端硬碟」以進行照片上傳。', type: 'error' });
-      setTimeout(() => setNotification(null), 4000);
-      if (!(event instanceof ClipboardEvent) && photoInputRef.current) {
-        photoInputRef.current.value = '';
-      }
-      return;
-    }
-    
+  const proceedWithUpload = async (token: string, files: File[]) => {
     setIsUploadingPhoto(true);
     setNotification({ message: '正在建立雲端硬碟照片目錄...', type: 'ai' });
 
@@ -999,7 +1048,7 @@ export default function App() {
         floorFolderName = "B棟5F";
       }
       
-      const folderId = await getOrCreateFolder(driveAccessToken, floorFolderName, selectedSpace);
+      const folderId = await getOrCreateFolder(token, floorFolderName, selectedSpace);
 
       const options = {
         maxSizeMB: 1.5,
@@ -1023,7 +1072,7 @@ export default function App() {
         const metaResponse = await fetch('https://www.googleapis.com/drive/v3/files', {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${driveAccessToken}`,
+            'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
@@ -1044,7 +1093,7 @@ export default function App() {
         const mediaResponse = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
           method: 'PATCH',
           headers: {
-            'Authorization': `Bearer ${driveAccessToken}`,
+            'Authorization': `Bearer ${token}`,
             'Content-Type': file.type
           },
           body: fileToUpload
@@ -1059,7 +1108,7 @@ export default function App() {
           await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions`, {
             method: 'POST',
             headers: {
-              'Authorization': `Bearer ${driveAccessToken}`,
+              'Authorization': `Bearer ${token}`,
               'Content-Type': 'application/json'
             },
             body: JSON.stringify({
@@ -1087,13 +1136,52 @@ export default function App() {
     } catch (err: any) {
       console.error(err);
       setNotification({ message: `照片上傳失敗: ${err.message || '未知錯誤'}`, type: 'error' });
-      setTimeout(() => setNotification(null), 4000);
+      setTimeout(() => setNotification(null), 5000);
     } finally {
       setIsUploadingPhoto(false);
-      if (!(event instanceof ClipboardEvent) && photoInputRef.current) {
+      if (photoInputRef.current) {
         photoInputRef.current.value = '';
       }
     }
+  };
+
+  const handlePhotoUpload = async (
+    event: React.ChangeEvent<HTMLInputElement> | ClipboardEvent | null,
+    filesOverride?: File[]
+  ) => {
+    let files: FileList | File[] | null = filesOverride || null;
+    
+    if (!files && event) {
+      if (event instanceof ClipboardEvent) {
+        const items = event.clipboardData?.items;
+        if (!items) return;
+        const imageFiles: File[] = [];
+        for (let i = 0; i < items.length; i++) {
+          if (items[i].type.indexOf('image') !== -1) {
+            const file = items[i].getAsFile();
+            if (file) imageFiles.push(file);
+          }
+        }
+        if (imageFiles.length === 0) return;
+        files = imageFiles;
+      } else {
+        files = event.target.files;
+      }
+    }
+
+    if (!files || files.length === 0 || !selectedSpace) return;
+
+    const filesArray = Array.from(files);
+
+    if (!driveAccessToken) {
+      setNotification({ message: '提示：照片將直接上傳至雲端。正在自動開啟 Google 驗證...', type: 'ai' });
+      initiateGoogleOAuth((newToken) => {
+        proceedWithUpload(newToken, filesArray);
+      });
+      return;
+    }
+    
+    await proceedWithUpload(driveAccessToken, filesArray);
   };
 
   useEffect(() => {
@@ -1435,6 +1523,14 @@ export default function App() {
       localStorage.setItem('gemini_api_key', apiKey.trim());
       setIsApiKeySet(true);
       setShowApiModal(false);
+    }
+  };
+
+  const handleSaveGoogleSettings = () => {
+    if (googleClientId.trim()) {
+      localStorage.setItem('google_client_id', googleClientId.trim());
+      setNotification({ message: 'Google Client ID 雲端設定已儲存！', type: 'success' });
+      setTimeout(() => setNotification(null), 3000);
     }
   };
 
@@ -2020,31 +2116,34 @@ export default function App() {
                               </h4>
                               {user && !isNursingDept && (
                                 <div className="flex items-center gap-2">
-                                  {!driveAccessToken ? (
-                                    <button 
-                                      onClick={handleConnectGoogleDrive}
-                                      disabled={isDriveConnecting}
-                                      className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-all shadow-md active:scale-95 disabled:opacity-50"
-                                    >
-                                      {isDriveConnecting ? <Loader2 size={14} className="animate-spin" /> : <UploadCloud size={14} />}
-                                      連結 Google 雲端硬碟
-                                    </button>
+                                  {driveAccessToken ? (
+                                    <span className="text-[10px] text-green-600 bg-green-50 px-2.5 py-1.5 rounded-lg border border-green-200 font-black tracking-normal flex items-center gap-1 shrink-0">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
+                                      已連結
+                                    </span>
                                   ) : (
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-[10px] text-green-600 bg-green-50 px-2.5 py-1.5 rounded-lg border border-green-200 font-black tracking-normal flex items-center gap-1 shrink-0">
-                                        <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
-                                        已連結雲端硬碟
-                                      </span>
-                                      <button 
-                                        onClick={() => photoInputRef.current?.click()}
-                                        disabled={isUploadingPhoto}
-                                        className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-slate-800 transition-all shadow-md active:scale-95 disabled:opacity-50"
-                                      >
-                                        {isUploadingPhoto ? <Loader2 size={14} className="animate-spin" /> : <Camera size={14} />}
-                                        上傳照片
-                                      </button>
-                                    </div>
+                                    <span className="text-[10px] text-slate-500 bg-slate-50 px-2.5 py-1.5 rounded-lg border border-slate-200 font-medium tracking-normal flex items-center gap-1 shrink-0" title="上傳照片時會自動引導登入驗證">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+                                      雲端自動驗證
+                                    </span>
                                   )}
+                                  
+                                  <button 
+                                    onClick={() => photoInputRef.current?.click()}
+                                    disabled={isUploadingPhoto || isDriveConnecting}
+                                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-all shadow-md active:scale-95 disabled:opacity-50"
+                                  >
+                                    {isUploadingPhoto || isDriveConnecting ? <Loader2 size={14} className="animate-spin" /> : <Camera size={14} />}
+                                    上傳照片
+                                  </button>
+
+                                  <button 
+                                    onClick={() => { setActiveSettingsTab('gdrive'); setShowApiModal(true); }}
+                                    className="p-2 bg-slate-100 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-200 transition-all shadow-sm flex items-center justify-center"
+                                    title="設定 Google Drive Client ID"
+                                  >
+                                    <Settings size={14} />
+                                  </button>
                                 </div>
                               )}
                               <input 
@@ -2464,7 +2563,7 @@ export default function App() {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="glass-panel rounded-2xl p-8 max-w-md w-full shadow-2xl relative"
+              className="glass-panel rounded-2xl p-8 max-w-xl w-full shadow-2xl relative"
             >
               <button 
                 onClick={() => setShowApiModal(false)}
@@ -2473,37 +2572,155 @@ export default function App() {
                 <X size={20} />
               </button>
               
-              <div className="flex flex-col items-center text-center space-y-4 mb-8">
-                <div className="bg-blue-500/20 p-4 rounded-full text-blue-500">
-                  <Key size={32} />
-                </div>
-                <h3 className="text-2xl font-light text-slate-900 uppercase tracking-tight">設定專屬 API KEY</h3>
-                <p className="text-sm text-slate-500 leading-relaxed">
-                  若您希望使用自定義的 Gemini API Key，請在此輸入。這將覆蓋系統預設的金鑰。金鑰將僅存在於本次瀏覽，不會持久存儲於伺服器。
-                </p>
+              <div className="flex border-b border-slate-200 mb-6">
+                <button
+                  onClick={() => setActiveSettingsTab('gemini')}
+                  className={`flex-1 pb-3 text-sm font-bold uppercase tracking-widest text-center transition-all ${activeSettingsTab === 'gemini' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-400 hover:text-slate-600'}`}
+                >
+                  AI 輔助設定
+                </button>
+                <button
+                  onClick={() => setActiveSettingsTab('gdrive')}
+                  className={`flex-1 pb-3 text-sm font-bold uppercase tracking-widest text-center transition-all ${activeSettingsTab === 'gdrive' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-400 hover:text-slate-600'}`}
+                >
+                  Google 雲端儲存
+                </button>
               </div>
 
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Gemini API Key</label>
-                  <input 
-                    type="text"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="在此貼上您的 AIza... 開頭金鑰"
-                    className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-base text-blue-600 outline-none focus:border-blue-500 transition-all font-mono"
-                  />
+              {activeSettingsTab === 'gemini' ? (
+                <div>
+                  <div className="flex flex-col items-center text-center space-y-4 mb-8">
+                    <div className="bg-blue-500/20 p-4 rounded-full text-blue-500">
+                      <Key size={32} />
+                    </div>
+                    <h3 className="text-2xl font-light text-slate-900 uppercase tracking-tight">設定專屬 API KEY</h3>
+                    <p className="text-sm text-slate-500 leading-relaxed">
+                      若您希望使用自定義的 Gemini API Key，請在此輸入。這將覆蓋系統預設的金鑰。金鑰將僅存在於本次瀏覽，不會持久存儲於伺服器。
+                    </p>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Gemini API Key</label>
+                      <input 
+                        type="text"
+                        value={apiKey}
+                        onChange={(e) => setApiKey(e.target.value)}
+                        placeholder="在此貼上您的 AIza... 開頭金鑰"
+                        className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-base text-blue-600 outline-none focus:border-blue-500 transition-all font-mono"
+                      />
+                    </div>
+                    <button 
+                      onClick={handleSetApiKey}
+                      className="w-full py-4 bg-blue-500 text-white font-bold rounded-xl text-sm uppercase tracking-widest hover:bg-blue-600 transition-all active:scale-95"
+                    >
+                      確認並連結 AI
+                    </button>
+                    <p className="text-xs text-center text-slate-500">
+                      尚未有金鑰？ <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">前往 Google AI Studio 獲取</a>
+                    </p>
+                  </div>
                 </div>
-                <button 
-                  onClick={handleSetApiKey}
-                  className="w-full py-4 bg-blue-500 text-white font-bold rounded-xl text-sm uppercase tracking-widest hover:bg-blue-600 transition-all active:scale-95"
-                >
-                  確認並連結 AI
-                </button>
-                <p className="text-xs text-center text-slate-500">
-                  尚未有金鑰？ <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">前往 Google AI Studio 獲取</a>
-                </p>
-              </div>
+              ) : (
+                <div className="space-y-6 max-h-[70vh] overflow-y-auto pr-2 custom-scrollbar">
+                  <div>
+                    <h3 className="text-xl font-black text-slate-800 tracking-tight flex items-center gap-2 mb-2">
+                      <UploadCloud size={20} className="text-blue-500" /> Google Drive 雲端設定
+                    </h3>
+                    <p className="text-xs text-slate-500 leading-relaxed mb-4">
+                      本系統所上傳的照片與影片將直接儲存於您指定的 Google 雲端硬碟，不佔用本站資料庫。請提供您的 OAuth 用戶端 ID 以連接雲端。
+                    </p>
+                  </div>
+
+                  <div className="space-y-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-widest flex justify-between">
+                        <span>Google OAuth Client ID</span>
+                        <span className="text-[10px] text-blue-500 cursor-pointer hover:underline" onClick={() => setGoogleClientId('76552910163-7bng5hj1k2k5c9jr48li4ha0jk53q2nk.apps.googleusercontent.com')}>使用預設 (jason4128)</span>
+                      </label>
+                      <input 
+                        type="text"
+                        value={googleClientId}
+                        onChange={(e) => setGoogleClientId(e.target.value)}
+                        placeholder="在此貼上您的 Google Client ID"
+                        className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-sm text-slate-700 outline-none focus:border-blue-500 transition-all font-mono"
+                      />
+                    </div>
+                    
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={handleSaveGoogleSettings}
+                        className="flex-1 py-3 bg-slate-900 text-white font-bold rounded-xl text-xs uppercase tracking-widest hover:bg-slate-800 transition-all"
+                      >
+                        儲存 Client ID 設定
+                      </button>
+                      <button 
+                        onClick={handleConnectGoogleDrive}
+                        disabled={isDriveConnecting}
+                        className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl text-xs uppercase tracking-widest hover:bg-blue-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                      >
+                        {isDriveConnecting ? <Loader2 size={12} className="animate-spin" /> : null}
+                        測試/開啟授權連結
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Connection Status Indicator */}
+                  <div className="flex items-center justify-between p-3 bg-white border border-slate-200 rounded-xl">
+                    <span className="text-xs font-black text-slate-700 uppercase tracking-wider">目前雲端狀態</span>
+                    {driveAccessToken ? (
+                      <span className="text-xs text-green-600 bg-green-50 px-3 py-1.5 rounded-lg border border-green-200 font-bold flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
+                        已授權 (可直接上傳照片)
+                      </span>
+                    ) : (
+                      <span className="text-xs text-amber-600 bg-amber-50 px-3 py-1.5 rounded-lg border border-amber-200 font-bold flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                        上傳時自動引導登入並傳送
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Step-by-step user guide */}
+                  <div className="border-t border-slate-100 pt-4">
+                    <h4 className="text-xs font-bold text-slate-800 uppercase tracking-widest mb-3 flex items-center gap-1 text-blue-600">
+                      💡 如何取得並使用我的 Client ID？
+                    </h4>
+                    <ul className="text-xs text-slate-500 space-y-2 leading-relaxed">
+                      <li>
+                        1. 前往 <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline inline-flex items-center gap-0.5 font-bold">Google Cloud Console ↗</a> 建立或選擇專案。
+                      </li>
+                      <li>
+                        2. 於首頁搜尋列搜尋 <strong>Google Drive API</strong> 並點擊「啟用」。
+                      </li>
+                      <li>
+                        3. 回到「API 和服務」的「憑證」中，點選「建立憑證」並選擇 <strong>OAuth 用戶端 ID</strong>（應用程式類型請選 <strong>Web 應用程式</strong>）。
+                      </li>
+                      <li>
+                        4. ⚠️ <strong>最重要！請在「已授權的 JavaScript 來源」中加入本網域：</strong>
+                        <div className="flex items-center gap-2 mt-1 bg-slate-100 p-2 rounded-lg text-[11px] font-mono text-slate-700 select-all border border-slate-200 justify-between">
+                          <span>{typeof window !== 'undefined' ? window.location.origin : 'https://...'}</span>
+                          <button 
+                            onClick={() => {
+                              if (typeof navigator !== 'undefined') {
+                                navigator.clipboard.writeText(window.location.origin);
+                                setNotification({ message: '已複製當前網頁來源網址！', type: 'success' });
+                                setTimeout(() => setNotification(null), 2000);
+                              }
+                            }}
+                            className="bg-white hover:bg-slate-50 text-[10px] text-slate-600 border border-slate-200 px-1.5 py-0.5 rounded font-sans"
+                          >
+                            複製
+                          </button>
+                        </div>
+                      </li>
+                      <li>
+                        5. 建立完成後複製產生的 Client ID 貼到上方的輸入框中，點擊<strong>儲存 Client ID 設定</strong>即可！
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+              )}
             </motion.div>
           </div>
         )}
