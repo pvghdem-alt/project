@@ -222,6 +222,9 @@ export default function App() {
   const [activeSettingsTab, setActiveSettingsTab] = useState<'gemini' | 'gdrive'>('gemini');
 
   // Google Drive state
+  const [googleAuthMethod, setGoogleAuthMethod] = useState<'firebase' | 'gsi'>(() => {
+    return (localStorage.getItem('google_auth_method') as 'firebase' | 'gsi') || 'firebase';
+  });
   const [googleClientId, setGoogleClientId] = useState(() => {
     const saved = localStorage.getItem('google_client_id');
     if (!saved || saved.includes('76552910163')) {
@@ -957,8 +960,50 @@ export default function App() {
 
   const initiateGoogleOAuth = (onSuccessCallback?: (token: string) => void) => {
     setIsDriveConnecting(true);
-    setNotification({ message: '正在開啟 Google 驗證視窗以儲存權限...', type: 'ai' });
-    
+
+    if (googleAuthMethod === 'firebase') {
+      setNotification({ message: '正在開啟 Google 安全彈出視窗以授權雲端硬碟權限...', type: 'ai' });
+      const provider = new GoogleAuthProvider();
+      provider.addScope('https://www.googleapis.com/auth/drive.file');
+
+      signInWithPopup(auth, provider).then((result) => {
+        setIsDriveConnecting(false);
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        if (credential?.accessToken) {
+          const token = credential.accessToken;
+          const expiresAt = Date.now() + 3600 * 1000;
+          
+          setDriveAccessToken(token);
+          localStorage.setItem('drive_access_token', token);
+          localStorage.setItem('drive_token_expires_at', expiresAt.toString());
+          
+          setNotification({ message: '成功連結 Google 雲端硬碟！熱連線已就緒。', type: 'success' });
+          setTimeout(() => setNotification(null), 3000);
+          
+          if (onSuccessCallback) {
+            onSuccessCallback(token);
+          }
+        } else {
+          setNotification({ message: '驗證失敗：無法登入取得雲端硬碟存取權杖。', type: 'error' });
+          setTimeout(() => setNotification(null), 5000);
+        }
+      }).catch((error: any) => {
+        setIsDriveConnecting(false);
+        console.error("Firebase auth popup failed:", error);
+        if (error.code === 'auth/popup-blocked') {
+          setNotification({ message: '授權視窗已被瀏覽器封鎖！請在網址列右側勾選「一律允許彈出視窗」，或更換瀏覽器後重試。', type: 'error' });
+        } else if (error.code === 'auth/cancelled-popup-request') {
+          setNotification({ message: '授權請求已被取消。', type: 'error' });
+        } else {
+          setNotification({ message: `連結雲端失敗: ${error.message || '請確認網路與 Firebase 登入設定。'}`, type: 'error' });
+        }
+        setTimeout(() => setNotification(null), 6000);
+      });
+      return;
+    }
+
+    // GSI Client direct authentication
+    setNotification({ message: '正在載入 Google 網頁驗證服務 (GIS)...', type: 'ai' });
     try {
       if (typeof window !== 'undefined' && (window as any).google?.accounts?.oauth2) {
         const client = (window as any).google.accounts.oauth2.initTokenClient({
@@ -981,14 +1026,14 @@ export default function App() {
                 onSuccessCallback(token);
               }
             } else {
-              setNotification({ message: '驗證失敗：未取得存取權杖。請確認 Client ID 與授權來源設定。', type: 'error' });
+              setNotification({ message: '驗證失敗：未取得存取權杖。請確認 Client ID 與 JavaScript 來源設定。', type: 'error' });
               setTimeout(() => setNotification(null), 5000);
             }
           },
           error_callback: (err: any) => {
             setIsDriveConnecting(false);
             console.error("GIS Error:", err);
-            setNotification({ message: `驗證失敗: ${err.message || '請確認 Client ID 密鑰與來源站點。'}`, type: 'error' });
+            setNotification({ message: `驗證失敗: ${err.message || '請檢查 Client ID 或當前來源網址。'}`, type: 'error' });
             setTimeout(() => setNotification(null), 5000);
           }
         });
@@ -1002,29 +1047,8 @@ export default function App() {
         };
         script.onerror = () => {
           setIsDriveConnecting(false);
-          // Standard Firebase popup login fallback
-          const provider = new GoogleAuthProvider();
-          provider.addScope('https://www.googleapis.com/auth/drive.file');
-          signInWithPopup(auth, provider).then((result) => {
-            const credential = GoogleAuthProvider.credentialFromResult(result);
-            if (credential?.accessToken) {
-              const token = credential.accessToken;
-              const expiresAt = Date.now() + 3600 * 1000;
-              setDriveAccessToken(token);
-              localStorage.setItem('drive_access_token', token);
-              localStorage.setItem('drive_token_expires_at', expiresAt.toString());
-              setNotification({ message: '成功連結 Google Drive！', type: 'success' });
-              setTimeout(() => setNotification(null), 4000);
-              if (onSuccessCallback) onSuccessCallback(token);
-            } else {
-              setNotification({ message: '驗證失敗：無法登入取得雲端硬碟權杖', type: 'error' });
-              setTimeout(() => setNotification(null), 4000);
-            }
-          }).catch((error) => {
-            console.error("Firebase popup fallback failed:", error);
-            setNotification({ message: '自動連結失敗：瀏覽器封鎖了快顯視窗，請重新載入此頁面或啟用快顯。', type: 'error' });
-            setTimeout(() => setNotification(null), 6000);
-          });
+          setNotification({ message: '載入 Google Identity SDK 失敗，請重試或切換至 Firebase 驗證模式。', type: 'error' });
+          setTimeout(() => setNotification(null), 5000);
         };
         document.body.appendChild(script);
       }
@@ -2631,43 +2655,124 @@ export default function App() {
                     <h3 className="text-xl font-black text-slate-800 tracking-tight flex items-center gap-2 mb-2">
                       <UploadCloud size={20} className="text-blue-500" /> Google Drive 雲端設定
                     </h3>
-                    <p className="text-xs text-slate-500 leading-relaxed mb-4">
-                      本系統所上傳的照片與影片將直接儲存於您指定的 Google 雲端硬碟，不佔用本站資料庫。請提供您的 OAuth 用戶端 ID 以連接雲端。
+                    <p className="text-xs text-slate-500 leading-relaxed">
+                      本系統照片與影片將儲存於您的 Google 雲端硬碟。請在此選擇適合您的 **Google 授權驗證技術**：
                     </p>
                   </div>
 
-                  <div className="space-y-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-bold text-slate-500 uppercase tracking-widest flex justify-between">
-                        <span>Google OAuth Client ID</span>
-                        <span className="text-[10px] text-blue-500 cursor-pointer hover:underline" onClick={() => setGoogleClientId('501431628979-jecrmd9k54aqg96q7nj9qlblmhs34lm7.apps.googleusercontent.com')}>重設為預設 ID</span>
-                      </label>
-                      <input 
-                        type="text"
-                        value={googleClientId}
-                        onChange={(e) => setGoogleClientId(e.target.value)}
-                        placeholder="在此貼上您的 Google Client ID"
-                        className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-sm text-slate-700 outline-none focus:border-blue-500 transition-all font-mono"
-                      />
+                  {/* Auth method selection */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGoogleAuthMethod('firebase');
+                        localStorage.setItem('google_auth_method', 'firebase');
+                        setNotification({ message: '已切換為：Firebase 安全彈出授權 (推薦)', type: 'success' });
+                        setTimeout(() => setNotification(null), 2000);
+                      }}
+                      className={`text-left p-4 rounded-xl border text-xs transition-all relative overflow-hidden flex flex-col justify-between ${
+                        googleAuthMethod === 'firebase'
+                          ? 'border-blue-500 bg-blue-50/40 rin-1 ring-blue-500 shadow-sm'
+                          : 'border-slate-200 bg-white hover:bg-slate-50'
+                      }`}
+                    >
+                      {googleAuthMethod === 'firebase' && (
+                        <span className="absolute top-0 right-0 bg-blue-500 text-white text-[9px] px-2 py-0.5 rounded-bl font-black">
+                          推薦使用
+                        </span>
+                      )}
+                      <div>
+                        <div className="font-extrabold text-slate-800 mb-1 flex items-center gap-1 text-[13px]">
+                          <span>Firebase 彈出授權</span>
+                        </div>
+                        <p className="text-slate-500 leading-relaxed text-[11px]">
+                          ⭐ **推薦**：自動經由安全伺服器代理，**無任何網域限制**。不論是預覽網址、隨機分配的測試網址、還是本地主機，都不會出現授權錯誤，一鍵立即使用！
+                        </p>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGoogleAuthMethod('gsi');
+                        localStorage.setItem('google_auth_method', 'gsi');
+                        setNotification({ message: '已切換為：自訂 Client ID 直接授權', type: 'success' });
+                        setTimeout(() => setNotification(null), 2000);
+                      }}
+                      className={`text-left p-4 rounded-xl border text-xs transition-all flex flex-col justify-between ${
+                        googleAuthMethod === 'gsi'
+                          ? 'border-blue-500 bg-blue-50/40 rin-1 ring-blue-500 shadow-sm'
+                          : 'border-slate-200 bg-white hover:bg-slate-50'
+                      }`}
+                    >
+                      <div>
+                        <div className="font-extrabold text-slate-800 mb-1 flex items-center gap-1 text-[13px]">
+                          <span>自訂 Client ID 驗證</span>
+                        </div>
+                        <p className="text-slate-500 leading-relaxed text-[11px]">
+                          使用您專屬 Google Cloud Console 的 Client ID，在網頁直接載入 Google 驗證。**必須手動向 Google 註冊當前網址為信任來源。**
+                        </p>
+                      </div>
+                    </button>
+                  </div>
+
+                  {googleAuthMethod === 'gsi' ? (
+                    <div className="space-y-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                      <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg text-[11px] text-amber-800 leading-relaxed font-medium">
+                        ⚠️ **重要提醒：** 當前為「自訂 Client ID」模式。若您的 Google Cloud Console 的 Javascript 授權來源中沒有加入本站目前的網址，登入時 Google 將會封鎖存取並顯示 `origin_mismatch` 錯誤（如您遭遇的 error 400）。若要快速排查或懶得設定，請按上方切換為 **「Firebase 彈出授權」** 便可直接使用！
+                      </div>
+                      
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-bold text-slate-500 uppercase tracking-widest flex justify-between">
+                          <span>Google OAuth Client ID</span>
+                          <span className="text-[10px] text-blue-500 cursor-pointer hover:underline" onClick={() => {
+                            setGoogleClientId('501431628979-jecrmd9k54aqg96q7nj9qlblmhs34lm7.apps.googleusercontent.com');
+                            localStorage.setItem('google_client_id', '501431628979-jecrmd9k54aqg96q7nj9qlblmhs34lm7.apps.googleusercontent.com');
+                          }}>重設為預設 ID</span>
+                        </label>
+                        <input 
+                          type="text"
+                          value={googleClientId}
+                          onChange={(e) => setGoogleClientId(e.target.value)}
+                          placeholder="在此貼上您的 Google Client ID"
+                          className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-sm text-slate-700 outline-none focus:border-blue-500 transition-all font-mono"
+                        />
+                      </div>
+                      
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={handleSaveGoogleSettings}
+                          className="flex-1 py-3 bg-slate-900 text-white font-bold rounded-xl text-xs uppercase tracking-widest hover:bg-slate-800 transition-all"
+                        >
+                          儲存 Client ID 設定
+                        </button>
+                        <button 
+                          onClick={handleConnectGoogleDrive}
+                          disabled={isDriveConnecting}
+                          className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl text-xs uppercase tracking-widest hover:bg-blue-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                        >
+                          {isDriveConnecting ? <Loader2 size={12} className="animate-spin" /> : null}
+                          測試/開啟授權連結
+                        </button>
+                      </div>
                     </div>
-                    
-                    <div className="flex gap-2">
-                      <button 
-                        onClick={handleSaveGoogleSettings}
-                        className="flex-1 py-3 bg-slate-900 text-white font-bold rounded-xl text-xs uppercase tracking-widest hover:bg-slate-800 transition-all"
-                      >
-                        儲存 Client ID 設定
-                      </button>
+                  ) : (
+                    <div className="space-y-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                      <div className="bg-green-50 border border-green-200 p-3 rounded-lg text-[11px] text-green-800 leading-relaxed font-bold flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse shrink-0"></span>
+                        已選擇免設定「Firebase 彈出授權」模式，此模式最穩健，不受任何 URL 或 Origin 網域變動限制！
+                      </div>
+
                       <button 
                         onClick={handleConnectGoogleDrive}
                         disabled={isDriveConnecting}
-                        className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl text-xs uppercase tracking-widest hover:bg-blue-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                        className="w-full py-3.5 bg-blue-600 text-white font-bold rounded-xl text-xs uppercase tracking-widest hover:bg-blue-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2 shadow-md active:scale-95"
                       >
                         {isDriveConnecting ? <Loader2 size={12} className="animate-spin" /> : null}
-                        測試/開啟授權連結
+                        測試/開啟 Firebase 授權連結
                       </button>
                     </div>
-                  </div>
+                  )}
 
                   {/* Connection Status Indicator */}
                   <div className="flex items-center justify-between p-3 bg-white border border-slate-200 rounded-xl">
@@ -2701,10 +2806,11 @@ export default function App() {
                         3. 回到「API 和服務」的「憑證」中，點選「建立憑證」並選擇 <strong>OAuth 用戶端 ID</strong>（應用程式類型請選 <strong>Web 應用程式</strong>）。
                       </li>
                       <li>
-                        4. ⚠️ <strong>最重要！請在「已授權的 JavaScript 來源」中加入本網域：</strong>
+                        4. ⚠️ **使用 GIS 模式最重要！** 請在「已授權的 JavaScript 來源」中加入本網域：
                         <div className="flex items-center gap-2 mt-1 bg-slate-100 p-2 rounded-lg text-[11px] font-mono text-slate-700 select-all border border-slate-200 justify-between">
                           <span>{typeof window !== 'undefined' ? window.location.origin : 'https://...'}</span>
                           <button 
+                            type="button"
                             onClick={() => {
                               if (typeof navigator !== 'undefined') {
                                 navigator.clipboard.writeText(window.location.origin);
