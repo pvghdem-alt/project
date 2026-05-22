@@ -223,7 +223,11 @@ export default function App() {
 
   // Google Drive state
   const [googleClientId, setGoogleClientId] = useState(() => {
-    return localStorage.getItem('google_client_id') || '76552910163-7bng5hj1k2k5c9jr48li4ha0jk53q2nk.apps.googleusercontent.com';
+    const saved = localStorage.getItem('google_client_id');
+    if (!saved || saved.includes('76552910163')) {
+      return '501431628979-jecrmd9k54aqg96q7nj9qlblmhs34lm7.apps.googleusercontent.com';
+    }
+    return saved;
   });
   const [driveAccessToken, setDriveAccessToken] = useState<string | null>(null);
   const [isDriveConnecting, setIsDriveConnecting] = useState(false);
@@ -2636,7 +2640,7 @@ export default function App() {
                     <div className="space-y-1.5">
                       <label className="text-xs font-bold text-slate-500 uppercase tracking-widest flex justify-between">
                         <span>Google OAuth Client ID</span>
-                        <span className="text-[10px] text-blue-500 cursor-pointer hover:underline" onClick={() => setGoogleClientId('76552910163-7bng5hj1k2k5c9jr48li4ha0jk53q2nk.apps.googleusercontent.com')}>使用預設 (jason4128)</span>
+                        <span className="text-[10px] text-blue-500 cursor-pointer hover:underline" onClick={() => setGoogleClientId('501431628979-jecrmd9k54aqg96q7nj9qlblmhs34lm7.apps.googleusercontent.com')}>重設為預設 ID</span>
                       </label>
                       <input 
                         type="text"
