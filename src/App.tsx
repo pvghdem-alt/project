@@ -1027,6 +1027,8 @@ export default function App() {
           setNotification({ message: '授權視窗已被瀏覽器封鎖！請在網址列右側勾選「一律允許彈出視窗」，或更換瀏覽器後重試。', type: 'error' });
         } else if (error.code === 'auth/cancelled-popup-request') {
           setNotification({ message: '授權請求已被取消。', type: 'error' });
+        } else if (error.code === 'auth/popup-closed-by-user') {
+          setNotification({ message: '授權視窗已被您關閉，請重新點擊以完成授權。', type: 'error' });
         } else {
           setNotification({ message: `連結雲端失敗: ${error.message || '請確認網路與 Firebase 登入設定。'}`, type: 'error' });
         }
