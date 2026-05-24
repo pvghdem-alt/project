@@ -997,6 +997,7 @@ export default function App() {
       setNotification({ message: '正在開啟 Google 安全彈出視窗以授權雲端硬碟權限...', type: 'ai' });
       const provider = new GoogleAuthProvider();
       provider.addScope('https://www.googleapis.com/auth/drive.file');
+      provider.addScope('https://www.googleapis.com/auth/documents');
 
       signInWithPopup(auth, provider).then((result) => {
         setIsDriveConnecting(false);
@@ -1040,7 +1041,7 @@ export default function App() {
       if (typeof window !== 'undefined' && (window as any).google?.accounts?.oauth2) {
         const client = (window as any).google.accounts.oauth2.initTokenClient({
           client_id: googleClientId.trim(),
-          scope: 'https://www.googleapis.com/auth/drive.file',
+          scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/documents',
           callback: (tokenResponse: any) => {
             setIsDriveConnecting(false);
             if (tokenResponse && tokenResponse.access_token) {
@@ -2098,7 +2099,15 @@ export default function App() {
             <div className="flex-1 flex overflow-hidden gap-6 lg:gap-8">
               <div className="flex-1 glass-panel rounded-3xl overflow-hidden shadow-2xl border border-white/40 relative flex flex-col">
                 {activeMainTab === 'report' ? (
-                  <ReportView projectMaps={projectMaps} customTopics={customTopics} allRequirements={cachedAllRequirements || []} />
+                  <ReportView 
+                    projectMaps={projectMaps} 
+                    customTopics={customTopics} 
+                    allRequirements={cachedAllRequirements || []} 
+                    spacePhotos={spacePhotos}
+                    driveAccessToken={driveAccessToken}
+                    initiateGoogleOAuth={initiateGoogleOAuth}
+                    setNotification={setNotification}
+                  />
                 ) : activeMainTab === 'map' ? (
                   <div className="flex-1 relative overflow-hidden flex flex-col">
                     <div className="p-4 border-b border-slate-100 bg-white/50 backdrop-blur-md flex justify-between items-center z-10 shrink-0">
@@ -3194,8 +3203,219 @@ export default function App() {
   );
 }
 
-function ReportView({ projectMaps, customTopics, allRequirements }: { projectMaps: ProjectMap[], customTopics: Topic[], allRequirements: RequirementCategory[] }) {
+function ReportView({ 
+  projectMaps, 
+  customTopics, 
+  allRequirements,
+  spacePhotos,
+  driveAccessToken,
+  initiateGoogleOAuth,
+  setNotification
+}: { 
+  projectMaps: ProjectMap[], 
+  customTopics: Topic[], 
+  allRequirements: RequirementCategory[],
+  spacePhotos: SpacePhoto[],
+  driveAccessToken: string | null,
+  initiateGoogleOAuth: (cb: (token: string) => void) => void,
+  setNotification: (n: any) => void
+}) {
   const globalTrades = customTopics.filter(t => t.type === 'trade');
+  const [isExporting, setIsExporting] = useState(false);
+
+  const performExport = async (token: string) => {
+    setIsExporting(true);
+    setNotification({ message: '正在產生 Google Docs，這可能需要一點時間...', type: 'ai' });
+    
+    try {
+      // Build HTML string
+      let html = `<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: "Arial", sans-serif; }
+    h1 { text-align: center; font-size: 24pt; margin-top: 40%; page-break-after: always; }
+    h2 { font-size: 18pt; margin-top: 24pt; border-bottom: 1px solid #ccc; padding-bottom: 4pt; page-break-before: always; }
+    h3 { font-size: 14pt; margin-top: 20pt; }
+    h4 { font-size: 12pt; font-weight: bold; margin-top: 16pt; }
+    p, li { font-size: 11pt; line-height: 1.5; }
+    .page-break { page-break-after: always; }
+    img { max-width: 600px; max-height: 400px; display: block; margin: 10px 0; }
+  </style>
+</head>
+<body>
+  <h1>屏東榮民總醫院龍泉分院「龍泉分院B棟3F、5F改建工程委託設計監造技術服務案(案號：1120101002)」細部設計需求書</h1>
+  <div class="page-break"></div>
+`;
+
+      // Build content
+      html += `<h2>目錄 (TOC)</h2>\n<p>{{TOC_PLACEHOLDER}}</p>\n`;
+
+      for (const floor of projectMaps) {
+        const floorSpaces = customTopics.filter(t => (t.type === 'space' || !t.type) && (t.isDefault || t.floorId === floor.id || t.floorId === 'global'));
+        if (floorSpaces.length === 0) continue;
+        
+        html += `<h2>${floor.name} 空間需求</h2>\n`;
+        
+        for (const space of floorSpaces) {
+          const reqs = allRequirements.filter(r => r.space === space.name || (!r.space && (r.title === space.name || r.title.includes(space.name))));
+          const photos = spacePhotos.filter(p => p.space === space.name);
+          
+          if (reqs.length === 0 && photos.length === 0) continue;
+          
+          html += `<h3>空間：${space.name}</h3>\n`;
+          
+          if (reqs.length > 0) {
+            html += `<h4>需求項目：</h4>\n`;
+            for (let i = 0; i < reqs.length; i++) {
+              const req = reqs[i];
+              html += `<p><strong>${i + 1}. ${req.title}</strong></p>\n<ul>\n`;
+              for (const pt of req.points) {
+                html += `<li>${pt}</li>\n`;
+              }
+              html += `</ul>\n`;
+            }
+          }
+          
+          if (photos.length > 0) {
+            html += `<h4>空間照片：</h4>\n`;
+            for (const photo of photos) {
+              if (photo.url) {
+                // If the url is a base64 string or public URL, we can safely embed it in img tag
+                // If it's a thumbnail URL from Drive, it might require auth, but google drive HTML conversion usually handles their own URLs well
+                html += `<img src="${photo.url}" alt="Space Photo" />\n`;
+              }
+            }
+          }
+        }
+      }
+
+      if (globalTrades.length > 0) {
+        html += `<h2>全區分項工程需求</h2>\n`;
+        for (const trade of globalTrades) {
+          const reqs = allRequirements.filter(r => r.space === trade.name || (!r.space && (r.title === trade.name || r.title.includes(trade.name))));
+          if (reqs.length === 0) continue;
+          
+          html += `<h3>${trade.name}</h3>\n`;
+          for (let i = 0; i < reqs.length; i++) {
+            const req = reqs[i];
+            html += `<p><strong>${i + 1}. ${req.title}</strong></p>\n<ul>\n`;
+            for (const pt of req.points) {
+              html += `<li>${pt}</li>\n`;
+            }
+            html += `</ul>\n`;
+          }
+        }
+      }
+
+      html += `</body></html>`;
+
+      // 1. Upload HTML as multipart to create Google Doc
+      const boundary = 'foo_bar_baz_boundary';
+      const metadata = {
+        name: '細部設計需求書_屏東榮總龍泉分院B棟',
+        mimeType: 'application/vnd.google-apps.document'
+      };
+      
+      const multipartRequestBody =
+        `--${boundary}\r\n` +
+        `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
+        `${JSON.stringify(metadata)}\r\n` +
+        `--${boundary}\r\n` +
+        `Content-Type: text/html; charset=UTF-8\r\n\r\n` +
+        `${html}\r\n` +
+        `--${boundary}--\r\n`;
+
+      const uploadRes = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': `multipart/related; boundary=${boundary}`
+        },
+        body: multipartRequestBody
+      });
+
+      if (!uploadRes.ok) throw new Error('上傳 Docs 失敗');
+      const fileData = await uploadRes.json();
+      const documentId = fileData.id;
+
+      // 2. Add Footer & Page Number using Docs API
+      const createFooterRes = await fetch(`https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          requests: [
+            {
+              createFooter: {
+                type: 'DEFAULT'
+              }
+            }
+          ]
+        })
+      });
+
+      if (createFooterRes.ok) {
+        const footerData = await createFooterRes.json();
+        const footerId = footerData.replies?.[0]?.createFooter?.footerId;
+
+        if (footerId) {
+          await fetch(`https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              requests: [
+                {
+                  insertPageNumber: {
+                    location: {
+                      segmentId: footerId,
+                      index: 0
+                    }
+                  }
+                },
+                {
+                  updateParagraphStyle: {
+                    range: {
+                      segmentId: footerId,
+                      startIndex: 0,
+                      endIndex: 1
+                    },
+                    paragraphStyle: {
+                      alignment: 'CENTER'
+                    },
+                    fields: 'alignment'
+                  }
+                }
+              ]
+            })
+          });
+        }
+      }
+
+      setNotification({ message: '成功匯出 Google Docs 細部設計需求書！可至雲端硬碟查看。', type: 'success' });
+      window.open(`https://docs.google.com/document/d/${documentId}/edit`, '_blank');
+      
+    } catch (err: any) {
+      console.error(err);
+      setNotification({ message: '匯出失敗: ' + err.message, type: 'error' });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleExportToDocs = () => {
+    if (!driveAccessToken) {
+      initiateGoogleOAuth((token) => performExport(token));
+    } else {
+      performExport(driveAccessToken);
+    }
+  };
   
   if (allRequirements.length === 0) {
     return (
@@ -3211,9 +3431,19 @@ function ReportView({ projectMaps, customTopics, allRequirements }: { projectMap
   return (
     <div className="flex-1 overflow-y-auto custom-scrollbar bg-slate-50 text-slate-800 p-8">
       <div className="max-w-5xl mx-auto space-y-12">
-        <header className="border-b-4 border-slate-900 pb-6">
-          <h2 className="text-4xl font-black tracking-tight text-slate-900 mb-2">專案需求彙整總表</h2>
-          <p className="text-lg font-bold text-slate-500 uppercase tracking-widest">各樓層空間與分項工程需求整理</p>
+        <header className="border-b-4 border-slate-900 pb-6 flex justify-between items-end">
+          <div>
+            <h2 className="text-4xl font-black tracking-tight text-slate-900 mb-2">專案需求彙整總表</h2>
+            <p className="text-lg font-bold text-slate-500 uppercase tracking-widest">各樓層空間與分項工程需求整理</p>
+          </div>
+          <button 
+            onClick={handleExportToDocs}
+            disabled={isExporting}
+            className="flex items-center gap-2 px-5 py-3 bg-blue-600 text-white font-bold rounded-xl text-sm hover:bg-blue-700 transition-all shadow-md active:scale-95 disabled:opacity-50"
+          >
+            {isExporting ? <Loader2 size={18} className="animate-spin" /> : <FileText size={18} />}
+            輸出 Google Docs
+          </button>
         </header>
 
         {projectMaps.map(floor => {
