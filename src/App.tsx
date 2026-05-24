@@ -50,7 +50,7 @@ import { DESIGN_SPECS } from './constants';
 import { askAiAssistant, setCustomApiKey, analyzeNotesToRequirements, deduplicateData, analyzeFileToSpecs } from './geminiService';
 import { db, auth } from './lib/firebase';
 import { signInWithEmailAndPassword, onAuthStateChanged, User, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
-import { Document, Packer, Paragraph, TextRun, ImageRun, HeadingLevel, TableOfContents, Table, TableRow, TableCell, BorderStyle, WidthType, AlignmentType, PageNumber, Footer, TabStopType, LeaderType } from 'docx';
+import { Document, Packer, Paragraph, TextRun, ImageRun, HeadingLevel, TableOfContents, Table, TableRow, TableCell, BorderStyle, WidthType, AlignmentType, PageNumber, Footer, TabStopType, LeaderType, Tab } from 'docx';
 import { 
   collection, 
   query, 
@@ -3441,9 +3441,29 @@ function ReportView({
       const tocParagraphs: any[] = [
         new Paragraph({
           pageBreakBefore: true,
-          text: "目錄",
+          text: "文件目錄",
           heading: HeadingLevel.HEADING_1,
           spacing: { after: 300 }
+        }),
+        new Paragraph({
+          text: "【自動目錄】（推薦：下載至 Microsoft Word 或 WPS 中開啟後，滑鼠右鍵點擊該區域選擇『更新欄位(Update Field)』，即可自動掃描整份文件，生成 100% 精確的圖片與內文分頁，並具備完美對齊的虛線前導點）",
+          spacing: { before: 100, after: 100 },
+          children: [
+            new TextRun({ text: "自動目錄功能組：", bold: true, color: "1E3A8A", size: 20 })
+          ]
+        }),
+        new TableOfContents("自動目錄", {
+          hyperlink: true,
+          headingStyleRange: "1-3",
+        }),
+        new Paragraph({
+          text: "",
+          spacing: { before: 400, after: 400 }
+        }),
+        new Paragraph({
+          text: "【手動預估目錄】（方便網頁、Google Drive 直接看，此頁數為系統基於預估行數推算）",
+          heading: HeadingLevel.HEADING_2,
+          spacing: { before: 200, after: 150 }
         })
       ];
 
@@ -3458,13 +3478,13 @@ function ReportView({
             tabStops: [
               {
                 type: TabStopType.RIGHT,
-                position: 9000,
+                position: 8200,
                 leader: LeaderType.DOT,
               },
             ],
             children: [
               new TextRun({ text: `${tocIndex++}. ${floor.name} 空間需求`, bold: true, size: 28, color: "1E3A8A" }),
-              new TextRun({ text: "\t", bold: true, size: 28, color: "1E3A8A" }),
+              new Tab(),
               new TextRun({ text: `${pageEstimates[`floor-${floor.id}`] || 4}`, bold: true, size: 28, color: "1E3A8A" }),
             ]
           })
@@ -3482,13 +3502,13 @@ function ReportView({
               tabStops: [
                 {
                   type: TabStopType.RIGHT,
-                  position: 9000,
+                  position: 8200,
                   leader: LeaderType.DOT,
                 },
               ],
               children: [
                 new TextRun({ text: `•  ${space.name}`, size: 24, color: "334155" }),
-                new TextRun({ text: "\t", size: 24, color: "334155" }),
+                new Tab(),
                 new TextRun({ text: `${pageEstimates[`space-${floor.id}-${space.name}`] || 4}`, size: 24, color: "334155" }),
               ]
             })
@@ -3503,13 +3523,13 @@ function ReportView({
             tabStops: [
               {
                 type: TabStopType.RIGHT,
-                position: 9000,
+                position: 8200,
                 leader: LeaderType.DOT,
               },
             ],
             children: [
               new TextRun({ text: `${tocIndex++}. 全區分項工程需求`, bold: true, size: 28, color: "1E3A8A" }),
-              new TextRun({ text: "\t", bold: true, size: 28, color: "1E3A8A" }),
+              new Tab(),
               new TextRun({ text: `${pageEstimates[`trades-header`] || 4}`, bold: true, size: 28, color: "1E3A8A" }),
             ]
           })
@@ -3526,13 +3546,13 @@ function ReportView({
               tabStops: [
                 {
                   type: TabStopType.RIGHT,
-                  position: 9000,
+                  position: 8200,
                   leader: LeaderType.DOT,
                 },
               ],
               children: [
                 new TextRun({ text: `•  ${trade.name}`, size: 24, color: "334155" }),
-                new TextRun({ text: "\t", size: 24, color: "334155" }),
+                new Tab(),
                 new TextRun({ text: `${pageEstimates[`trade-${trade.name}`] || 4}`, size: 24, color: "334155" }),
               ]
             })
@@ -3731,7 +3751,20 @@ function ReportView({
           updateFields: true,
         },
         sections: [{
-          properties: {},
+          properties: {
+            page: {
+              size: {
+                width: 11906, // A4 width (~21cm)
+                height: 16838, // A4 height (~29.7cm)
+              },
+              margin: {
+                top: 1440, // 1 inch
+                bottom: 1440,
+                left: 1440,
+                right: 1440,
+              }
+            }
+          },
           footers: {
             default: new Footer({
               children: [
