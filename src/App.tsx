@@ -191,6 +191,11 @@ export default function App() {
   const [loginPassword, setLoginPassword] = useState('');
   const [isLoginLoading, setIsLoginLoading] = useState(false);
 
+  // Auth Error diagnostic & alternative options modal
+  const [showAuthErrorModal, setShowAuthErrorModal] = useState(false);
+  const [manualToken, setManualToken] = useState('');
+  const [authErrorCode, setAuthErrorCode] = useState('');
+
   const [activeFloor, setActiveFloor] = useState<FloorKey>('B3F');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [sidebarMode, setSidebarMode] = useState<'root' | 'space' | 'trade'>('root');
@@ -1061,13 +1066,15 @@ export default function App() {
       }).catch((error: any) => {
         setIsDriveConnecting(false);
         console.error("Firebase auth popup failed:", error);
+        setAuthErrorCode(error.code || 'unknown');
+        setShowAuthErrorModal(true);
         if (error.code === 'auth/popup-blocked') {
-          setNotification({ message: '授權視窗已被瀏覽器封鎖！請在網址列右側勾選「一律允許彈出視窗」，或更換瀏覽器後重試。', type: 'error' });
+          setNotification({ message: '授權視窗已被瀏覽器封鎖！請查看彈出的疑難排解助手，或更換瀏覽器後重試。', type: 'error' });
         } else if (error.code === 'auth/cancelled-popup-request') {
-          setNotification({ message: '授權請求已被取消。', type: 'error' });
+          setNotification({ message: '授權請求已被取消。已為您開啟疑難排解助手。', type: 'error' });
         } else if (error.code === 'auth/popup-closed-by-user') {
           setNotification({ 
-            message: 'Firebase 授權視窗已被關閉。若是因為在預覽框架中無回應，請「在新分頁點開此 APP」再試一次，或在設定切換為自訂 Client ID 模式！', 
+            message: '授權視窗已被關閉。已為您開啟疑難排解助手，提供您「新分頁開啟」與「手動貼上權杖」等備用連結方案！', 
             type: 'error' 
           });
         } else {
@@ -1648,6 +1655,19 @@ export default function App() {
       setNotification({ message: 'Google Client ID 雲端設定已儲存！', type: 'success' });
       setTimeout(() => setNotification(null), 3000);
     }
+  };
+
+  const handleSaveManualToken = () => {
+    if (!manualToken.trim()) return;
+    const token = manualToken.trim();
+    const expiresAt = Date.now() + 3600 * 1000; // 1 hour expiration
+    setDriveAccessToken(token);
+    localStorage.setItem('drive_access_token_v4', token);
+    localStorage.setItem('drive_token_expires_at_v4', expiresAt.toString());
+    setShowAuthErrorModal(false);
+    setManualToken('');
+    setNotification({ message: '手動 Cloud Access Token 熱連結成功！', type: 'success' });
+    setTimeout(() => setNotification(null), 3000);
   };
 
   const handleAiQuery = async () => {
@@ -3172,6 +3192,101 @@ export default function App() {
                >
                  暫不登入 (僅限檢視)
                </button>
+            </motion.div>
+          </div>
+        )}
+
+        {showAuthErrorModal && (
+          <div className="fixed inset-0 z-[130] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowAuthErrorModal(false)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-md" />
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-lg bg-white rounded-3xl shadow-2xl overflow-hidden p-8 space-y-6">
+              
+              <button 
+                onClick={() => setShowAuthErrorModal(false)}
+                className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-2 hover:bg-slate-50 rounded-full transition-colors"
+                id="btn-close-auth-err"
+              >
+                <X size={20} />
+              </button>
+
+              <div className="space-y-2 text-center">
+                <div className="w-16 h-16 bg-amber-50 rounded-2xl flex items-center justify-center text-amber-500 mx-auto shadow-sm border border-amber-100">
+                  <ShieldAlert size={32} />
+                </div>
+                <h3 className="text-xl font-black text-slate-900">Google 雲端連結排解助手</h3>
+                <p className="text-xs text-slate-500 font-medium">若點擊登入時遇到錯誤或視窗無回應，請參考以下方案</p>
+              </div>
+
+              {authErrorCode && (
+                <div className="bg-slate-50 rounded-xl p-3 border border-slate-100 text-center">
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">錯誤代碼 / ERROR CODE</span>
+                  <code className="text-xs font-mono font-bold text-red-500 bg-red-50/50 px-2 py-0.5 rounded border border-red-100 mt-1 inline-block">
+                    {authErrorCode}
+                  </code>
+                </div>
+              )}
+
+              <div className="space-y-4 text-slate-600 text-xs leading-relaxed max-h-[50vh] overflow-y-auto pr-1">
+                <p>
+                  由於瀏覽器的安全隱私政策（如禁用第三方 Cookie / 阻擋跨網域彈出視窗），在 <strong>AI Studio 的「內嵌預覽框架」裡面</strong> 直接點擊 Google 彈出式授權時，常常會遇到驗證金鑰無法傳回的情況（常見為 <code>auth/popup-closed-by-user</code> 或網頁無回應）。
+                </p>
+
+                <div className="space-y-3 bg-blue-50/60 border border-blue-100 p-4 rounded-2xl">
+                  <p className="font-bold text-blue-900 flex items-center gap-1">
+                    <Sparkles size={14} /> 方案 A：在新分頁/新視窗中開啟 (強烈推薦 100% 成功性能)
+                  </p>
+                  <p className="text-[11px] text-blue-700">
+                    在獨立網頁分頁中，瀏覽器不受 iFrame 安全限制阻擋。您可以正常點擊彈出視窗登入 Google 並授權：
+                  </p>
+                  <a 
+                    href={window.location.href}
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="w-full h-11 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-md shadow-blue-500/10 transition-all hover:scale-[1.01] active:scale-[0.99] text-[11px] uppercase tracking-wider text-center"
+                    id="btn-open-new-tab"
+                  >
+                    <ExternalLink size={14} className="inline" /> 在新分頁開啟此 APP 連結
+                  </a>
+                </div>
+
+                <div className="space-y-3 bg-slate-50 border border-slate-200 p-4 rounded-2xl">
+                  <p className="font-bold text-slate-800 flex items-center gap-1">
+                    <Key size={14} className="text-slate-500" /> 方案 B：手動貼上 Cloud Access Token (極速備用)
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    如果您已從 Google APIs OAuth 取得隨機 `access_token`，可以直接黏貼在此：
+                  </p>
+                  <div className="flex gap-2">
+                    <input 
+                      type="password"
+                      value={manualToken}
+                      onChange={(e) => setManualToken(e.target.value)}
+                      placeholder="請貼上以 ya29.... 開頭的 Access Token"
+                      className="flex-1 h-10 px-3 bg-white border border-slate-300 rounded-lg text-[11px] text-slate-700 outline-none focus:border-blue-500 transition-all font-mono"
+                      id="input-manual-token"
+                    />
+                    <button
+                      onClick={handleSaveManualToken}
+                      disabled={!manualToken.trim()}
+                      className="h-10 px-4 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-lg text-[11px] transition-all disabled:opacity-40 cursor-pointer shrink-0"
+                      id="btn-save-manual-token"
+                    >
+                      儲存權杖
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-2">
+                <button 
+                  onClick={() => setShowAuthErrorModal(false)}
+                  className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                  id="btn-close-diagnostic"
+                >
+                  關閉診斷
+                </button>
+              </div>
+
             </motion.div>
           </div>
         )}
