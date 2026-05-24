@@ -50,6 +50,7 @@ import { DESIGN_SPECS } from './constants';
 import { askAiAssistant, setCustomApiKey, analyzeNotesToRequirements, deduplicateData, analyzeFileToSpecs } from './geminiService';
 import { db, auth } from './lib/firebase';
 import { signInWithEmailAndPassword, onAuthStateChanged, User, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
+import { Document, Packer, Paragraph, TextRun, ImageRun, HeadingLevel, TableOfContents, Table, TableRow, TableCell, BorderStyle, WidthType, AlignmentType, PageNumber, Footer, TabStopType, LeaderType } from 'docx';
 import { 
   collection, 
   query, 
@@ -236,14 +237,26 @@ export default function App() {
   const [isDriveConnecting, setIsDriveConnecting] = useState(false);
 
   useEffect(() => {
-    const savedToken = localStorage.getItem('drive_access_token');
-    const savedExpiresAt = localStorage.getItem('drive_token_expires_at');
-    if (savedToken && savedExpiresAt) {
-      if (Date.now() < Number(savedExpiresAt)) {
-        setDriveAccessToken(savedToken);
-      } else {
-        localStorage.removeItem('drive_access_token');
-        localStorage.removeItem('drive_token_expires_at');
+    const suffixes = ['_v4', '_v3', '_v2', ''];
+    for (const suffix of suffixes) {
+      const tokenKey = `drive_access_token${suffix}`;
+      const expiresKey = `drive_token_expires_at${suffix}`;
+      const savedToken = localStorage.getItem(tokenKey);
+      const savedExpiresAt = localStorage.getItem(expiresKey);
+      
+      if (savedToken && savedExpiresAt) {
+        if (Date.now() < Number(savedExpiresAt)) {
+          setDriveAccessToken(savedToken);
+          // Migrate to v4 for current version consistency
+          if (suffix !== '_v4') {
+            localStorage.setItem('drive_access_token_v4', savedToken);
+            localStorage.setItem('drive_token_expires_at_v4', savedExpiresAt);
+          }
+          break;
+        } else {
+          localStorage.removeItem(tokenKey);
+          localStorage.removeItem(expiresKey);
+        }
       }
     }
   }, []);
@@ -281,6 +294,7 @@ export default function App() {
   const [isResizing, setIsResizing] = useState(false);
 
   const [spacePhotos, setSpacePhotos] = useState<SpacePhoto[]>([]);
+  const currentSpacePhotos = spacePhotos.filter(p => p.space === selectedSpace);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [selectedLightboxPhoto, setSelectedLightboxPhoto] = useState<string | null>(null);
   const [showCopySpecsModal, setShowCopySpecsModal] = useState(false);
@@ -315,16 +329,16 @@ export default function App() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!selectedLightboxPhoto) return;
       if (e.key === 'ArrowLeft') {
-        const currentIndex = spacePhotos.findIndex(p => p.url === selectedLightboxPhoto);
-        if (currentIndex > -1 && spacePhotos.length > 0) {
-          const nextIndex = (currentIndex - 1 + spacePhotos.length) % spacePhotos.length;
-          setSelectedLightboxPhoto(spacePhotos[nextIndex].url);
+        const currentIndex = currentSpacePhotos.findIndex(p => p.url === selectedLightboxPhoto);
+        if (currentIndex > -1 && currentSpacePhotos.length > 0) {
+          const nextIndex = (currentIndex - 1 + currentSpacePhotos.length) % currentSpacePhotos.length;
+          setSelectedLightboxPhoto(currentSpacePhotos[nextIndex].url);
         }
       } else if (e.key === 'ArrowRight') {
-        const currentIndex = spacePhotos.findIndex(p => p.url === selectedLightboxPhoto);
-        if (currentIndex > -1 && spacePhotos.length > 0) {
-          const nextIndex = (currentIndex + 1) % spacePhotos.length;
-          setSelectedLightboxPhoto(spacePhotos[nextIndex].url);
+        const currentIndex = currentSpacePhotos.findIndex(p => p.url === selectedLightboxPhoto);
+        if (currentIndex > -1 && currentSpacePhotos.length > 0) {
+          const nextIndex = (currentIndex + 1) % currentSpacePhotos.length;
+          setSelectedLightboxPhoto(currentSpacePhotos[nextIndex].url);
         }
       } else if (e.key === 'Escape') {
         setSelectedLightboxPhoto(null);
@@ -333,7 +347,7 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedLightboxPhoto, spacePhotos]);
+  }, [selectedLightboxPhoto, currentSpacePhotos]);
 
   // Initializing active floor if data exists
   useEffect(() => {
@@ -520,11 +534,7 @@ export default function App() {
 
   // Firestore Sync: Space Photos
   useEffect(() => {
-    if (!selectedSpace || activeMainTab !== 'photos') {
-      setSpacePhotos([]);
-      return;
-    }
-    const q = query(collection(db, 'photos'), where('space', '==', selectedSpace), orderBy('createdAt', 'desc'));
+    const q = query(collection(db, 'photos'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as SpacePhoto[];
       setSpacePhotos(data);
@@ -532,7 +542,7 @@ export default function App() {
       handleFirestoreError(error, OperationType.GET, 'photos');
     });
     return () => unsubscribe();
-  }, [selectedSpace, activeMainTab]);
+  }, []);
 
   const handleAddNote = async () => {
     if (!newNote.trim() || !selectedSpace) return;
@@ -997,6 +1007,7 @@ export default function App() {
       setNotification({ message: '正在開啟 Google 安全彈出視窗以授權雲端硬碟權限...', type: 'ai' });
       const provider = new GoogleAuthProvider();
       provider.addScope('https://www.googleapis.com/auth/drive.file');
+      provider.addScope('https://www.googleapis.com/auth/drive.readonly');
       provider.addScope('https://www.googleapis.com/auth/documents');
 
       signInWithPopup(auth, provider).then((result) => {
@@ -1007,8 +1018,8 @@ export default function App() {
           const expiresAt = Date.now() + 3600 * 1000;
           
           setDriveAccessToken(token);
-          localStorage.setItem('drive_access_token', token);
-          localStorage.setItem('drive_token_expires_at', expiresAt.toString());
+          localStorage.setItem('drive_access_token_v4', token);
+          localStorage.setItem('drive_token_expires_at_v4', expiresAt.toString());
           
           setNotification({ message: '成功連結 Google 雲端硬碟！熱連線已就緒。', type: 'success' });
           setTimeout(() => setNotification(null), 3000);
@@ -1028,7 +1039,10 @@ export default function App() {
         } else if (error.code === 'auth/cancelled-popup-request') {
           setNotification({ message: '授權請求已被取消。', type: 'error' });
         } else if (error.code === 'auth/popup-closed-by-user') {
-          setNotification({ message: '授權視窗已被您關閉，請重新點擊以完成授權。', type: 'error' });
+          setNotification({ 
+            message: 'Firebase 授權視窗已被關閉。若是因為在預覽框架中無回應，請「在新分頁點開此 APP」再試一次，或在設定切換為自訂 Client ID 模式！', 
+            type: 'error' 
+          });
         } else {
           setNotification({ message: `連結雲端失敗: ${error.message || '請確認網路與 Firebase 登入設定。'}`, type: 'error' });
         }
@@ -1043,7 +1057,7 @@ export default function App() {
       if (typeof window !== 'undefined' && (window as any).google?.accounts?.oauth2) {
         const client = (window as any).google.accounts.oauth2.initTokenClient({
           client_id: googleClientId.trim(),
-          scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/documents',
+          scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/documents',
           callback: (tokenResponse: any) => {
             setIsDriveConnecting(false);
             if (tokenResponse && tokenResponse.access_token) {
@@ -1051,8 +1065,8 @@ export default function App() {
               const expiresAt = Date.now() + (Number(tokenResponse.expires_in) * 1000);
               
               setDriveAccessToken(token);
-              localStorage.setItem('drive_access_token', token);
-              localStorage.setItem('drive_token_expires_at', expiresAt.toString());
+              localStorage.setItem('drive_access_token_v4', token);
+              localStorage.setItem('drive_token_expires_at_v4', expiresAt.toString());
               
               setNotification({ message: '成功連結 Google 雲端硬碟！熱連線已就緒。', type: 'success' });
               setTimeout(() => setNotification(null), 3000);
@@ -2230,9 +2244,9 @@ export default function App() {
                             </div>
 
                             <div className="flex-1 overflow-y-auto custom-scrollbar pr-2">
-                              {spacePhotos.length > 0 ? (
+                              {currentSpacePhotos.length > 0 ? (
                                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 py-2">
-                                  {spacePhotos.map((photo) => (
+                                  {currentSpacePhotos.map((photo) => (
                                     <div 
                                       key={photo.id} 
                                       onClick={() => setSelectedLightboxPhoto(photo.url)}
@@ -3145,7 +3159,7 @@ export default function App() {
                
                <div className="relative w-full flex items-center justify-center group">
                  {/* Navigation Buttons */}
-                 {spacePhotos.length > 1 && (
+                 {currentSpacePhotos.length > 1 && (
                    <>
                      <button 
                        onClick={(e) => {
@@ -3230,104 +3244,531 @@ function ReportView({
     setNotification({ message: '正在產生 Google Docs，這可能需要一點時間...', type: 'ai' });
     
     try {
-      // Build HTML string
-      let html = `<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-  <meta charset="UTF-8">
-  <style>
-    body { font-family: "Arial", sans-serif; }
-    h1 { text-align: center; font-size: 24pt; margin-top: 40%; page-break-after: always; }
-    h2 { font-size: 18pt; margin-top: 24pt; border-bottom: 1px solid #ccc; padding-bottom: 4pt; page-break-before: always; }
-    h3 { font-size: 14pt; margin-top: 20pt; }
-    h4 { font-size: 12pt; font-weight: bold; margin-top: 16pt; }
-    p, li { font-size: 11pt; line-height: 1.5; }
-    .page-break { page-break-after: always; }
-    img { max-width: 600px; max-height: 400px; display: block; margin: 10px 0; }
-  </style>
-</head>
-<body>
-  <h1>屏東榮民總醫院龍泉分院「龍泉分院B棟3F、5F改建工程委託設計監造技術服務案(案號：1120101002)」細部設計需求書</h1>
-  <div class="page-break"></div>
-`;
+      const docChildren: any[] = [];
 
-      // Build content
-      html += `<h2>目錄 (TOC)</h2>\n<p>{{TOC_PLACEHOLDER}}</p>\n`;
+      const getImageData = async (photo: SpacePhoto): Promise<{ data: Uint8Array, width: number, height: number } | null> => {
+        try {
+          console.log("Processing photo for design doc:", photo);
+          let blob: Blob | null = null;
+          if (photo.driveFileId) {
+            console.log("Fetching Drive file content for ID:", photo.driveFileId);
+            const res = await fetch(`https://www.googleapis.com/drive/v3/files/${photo.driveFileId}?alt=media`, {
+              headers: { Authorization: `Bearer ${token}` }
+            });
+            console.log("Drive file fetch response status:", res.status);
+            if (res.ok) {
+              blob = await res.blob();
+              console.log("Successfully fetched Drive file blob, size:", blob?.size);
+            } else {
+              const textErr = await res.text();
+              console.error("Failed to fetch Drive file blob:", textErr);
+            }
+          } else if (photo.url && !photo.url.startsWith('blob:')) {
+            try {
+              console.log("Fetching regular URL:", photo.url);
+              const res = await fetch(photo.url);
+              if (res.ok) {
+                blob = await res.blob();
+                console.log("Successfully fetched regular URL blob, size:", blob?.size);
+              }
+            } catch (err) {
+              console.warn('CORS or fetch failed for url', err);
+            }
+          }
+
+          if (!blob && photo.url) {
+             if (photo.url.startsWith('data:image') || photo.url.startsWith('blob:')) {
+                blob = await (await fetch(photo.url)).blob();
+             }
+          }
+
+          if (!blob) return null;
+
+          return await new Promise((resolve) => {
+            const img = new Image();
+            // img.crossOrigin = 'anonymous'; // Commented out to prevent same-origin security errors with blob: URLs
+            img.onload = () => {
+              const canvas = document.createElement('canvas');
+              const MAX_WIDTH = 450;
+              let width = img.width;
+              let height = img.height;
+
+              if (width > MAX_WIDTH) {
+                height = Math.round((height * MAX_WIDTH) / width);
+                width = MAX_WIDTH;
+              }
+
+              canvas.width = width;
+              canvas.height = height;
+              const ctx = canvas.getContext('2d');
+              if (ctx) {
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillRect(0, 0, width, height);
+                ctx.drawImage(img, 0, 0, width, height);
+                canvas.toBlob((b) => {
+                  if (b) {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve({ data: new Uint8Array(reader.result as ArrayBuffer), width, height });
+                    reader.readAsArrayBuffer(b);
+                  } else {
+                    resolve(null);
+                  }
+                }, 'image/jpeg', 0.85);
+              } else {
+                resolve(null);
+              }
+            };
+            img.onerror = () => resolve(null);
+            img.src = URL.createObjectURL(blob!);
+          });
+        } catch (e) {
+          console.warn('Image process failed', e);
+          return null;
+        }
+      };
+
+      docChildren.push(
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { before: 2000, after: 1000 },
+          children: [
+            new TextRun({ text: "屏東榮民總醫院龍泉分院", size: 52, bold: true }),
+          ]
+        }),
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 400 },
+          children: [
+            new TextRun({ text: "「龍泉分院B棟3F、5F改建工程委託", size: 36 }),
+          ]
+        }),
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 400 },
+          children: [
+            new TextRun({ text: "設計監造技術服務案(案號：1120101002)」", size: 36 }),
+          ]
+        }),
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 1400 },
+          pageBreakBefore: false,
+          children: [
+            new TextRun({ text: "細部設計需求書", size: 40 }),
+          ]
+        })
+      );
+
+      // 2. Beautiful Table of Contents with Exact Pre-calculated Page Numbers and Leader Dots!
+      const pageEstimates: Record<string, number> = {};
+      let estPage = 4; // First floor content begins on Page 4 (TOC fits on Page 2 & 3)
+      let estLines = 0;
+      const LINES_PER_PAGE = 31; // Standard lines on a printed page
 
       for (const floor of projectMaps) {
         const floorSpaces = customTopics.filter(t => (t.type === 'space' || !t.type) && (t.isDefault || t.floorId === floor.id || t.floorId === 'global'));
         if (floorSpaces.length === 0) continue;
         
-        html += `<h2>${floor.name} 空間需求</h2>\n`;
+        // Floor header has pageBreakBefore: true
+        if (estLines > 0) {
+          estPage += 1;
+          estLines = 0;
+        }
+        pageEstimates[`floor-${floor.id}`] = estPage;
+
+        for (const space of floorSpaces) {
+          const reqs = allRequirements.filter(r => r.space === space.name || (!r.space && (r.title === space.name || r.title.includes(space.name))));
+          const photos = spacePhotos.filter(p => p.space === space.name);
+          if (reqs.length === 0 && photos.length === 0) continue;
+          
+          // Estimate lines occupied by this space table
+          let spaceLines = 4; // Margin + header within table
+          if (reqs.length > 0) {
+            spaceLines += 2; // "需求項目："
+            for (const req of reqs) {
+              spaceLines += 1; // title
+              spaceLines += req.points.length; // bullets
+            }
+          }
+          if (photos.length > 0) {
+            spaceLines += 2; // "空間照片："
+            spaceLines += photos.length * 12; // each photo takes about 12 lines
+          }
+          
+          if (estLines + spaceLines > LINES_PER_PAGE) {
+            const totalLines = estLines + spaceLines;
+            const extraPages = Math.floor(totalLines / LINES_PER_PAGE);
+            pageEstimates[`space-${floor.id}-${space.name}`] = estPage;
+            estPage += extraPages;
+            estLines = totalLines % LINES_PER_PAGE;
+          } else {
+            pageEstimates[`space-${floor.id}-${space.name}`] = estPage;
+            estLines += spaceLines;
+          }
+        }
+      }
+
+      if (globalTrades.length > 0) {
+        if (estLines > 0) {
+          estPage += 1;
+          estLines = 0;
+        }
+        pageEstimates[`trades-header`] = estPage;
+        
+        for (const trade of globalTrades) {
+          const reqs = allRequirements.filter(r => r.space === trade.name || (!r.space && (r.title === trade.name || r.title.includes(trade.name))));
+          if (reqs.length === 0) continue;
+          
+          let tradeLines = 3;
+          for (const req of reqs) {
+            tradeLines += 1;
+            tradeLines += req.points.length;
+          }
+          
+          if (estLines + tradeLines > LINES_PER_PAGE) {
+            const totalLines = estLines + tradeLines;
+            const extraPages = Math.floor(totalLines / LINES_PER_PAGE);
+            pageEstimates[`trade-${trade.name}`] = estPage;
+            estPage += extraPages;
+            estLines = totalLines % LINES_PER_PAGE;
+          } else {
+            pageEstimates[`trade-${trade.name}`] = estPage;
+            estLines += tradeLines;
+          }
+        }
+      }
+
+      const tocParagraphs: any[] = [
+        new Paragraph({
+          pageBreakBefore: true,
+          text: "目錄",
+          heading: HeadingLevel.HEADING_1,
+          spacing: { after: 300 }
+        })
+      ];
+
+      let tocIndex = 1;
+      for (const floor of projectMaps) {
+        const floorSpaces = customTopics.filter(t => (t.type === 'space' || !t.type) && (t.isDefault || t.floorId === floor.id || t.floorId === 'global'));
+        if (floorSpaces.length === 0) continue;
+
+        tocParagraphs.push(
+          new Paragraph({
+            spacing: { before: 200, after: 80 },
+            tabStops: [
+              {
+                type: TabStopType.RIGHT,
+                position: 9000,
+                leader: LeaderType.DOT,
+              },
+            ],
+            children: [
+              new TextRun({ text: `${tocIndex++}. ${floor.name} 空間需求`, bold: true, size: 28, color: "1E3A8A" }),
+              new TextRun({ text: "\t", bold: true, size: 28, color: "1E3A8A" }),
+              new TextRun({ text: `${pageEstimates[`floor-${floor.id}`] || 4}`, bold: true, size: 28, color: "1E3A8A" }),
+            ]
+          })
+        );
+
+        for (const space of floorSpaces) {
+          const reqs = allRequirements.filter(r => r.space === space.name || (!r.space && (r.title === space.name || r.title.includes(space.name))));
+          const photos = spacePhotos.filter(p => p.space === space.name);
+          if (reqs.length === 0 && photos.length === 0) continue;
+
+          tocParagraphs.push(
+            new Paragraph({
+              spacing: { after: 60 },
+              indent: { left: 400 },
+              tabStops: [
+                {
+                  type: TabStopType.RIGHT,
+                  position: 9000,
+                  leader: LeaderType.DOT,
+                },
+              ],
+              children: [
+                new TextRun({ text: `•  ${space.name}`, size: 24, color: "334155" }),
+                new TextRun({ text: "\t", size: 24, color: "334155" }),
+                new TextRun({ text: `${pageEstimates[`space-${floor.id}-${space.name}`] || 4}`, size: 24, color: "334155" }),
+              ]
+            })
+          );
+        }
+      }
+
+      if (globalTrades.length > 0) {
+        tocParagraphs.push(
+          new Paragraph({
+            spacing: { before: 300, after: 80 },
+            tabStops: [
+              {
+                type: TabStopType.RIGHT,
+                position: 9000,
+                leader: LeaderType.DOT,
+              },
+            ],
+            children: [
+              new TextRun({ text: `${tocIndex++}. 全區分項工程需求`, bold: true, size: 28, color: "1E3A8A" }),
+              new TextRun({ text: "\t", bold: true, size: 28, color: "1E3A8A" }),
+              new TextRun({ text: `${pageEstimates[`trades-header`] || 4}`, bold: true, size: 28, color: "1E3A8A" }),
+            ]
+          })
+        );
+
+        for (const trade of globalTrades) {
+          const reqs = allRequirements.filter(r => r.space === trade.name || (!r.space && (r.title === trade.name || r.title.includes(trade.name))));
+          if (reqs.length === 0) continue;
+
+          tocParagraphs.push(
+            new Paragraph({
+              spacing: { after: 60 },
+              indent: { left: 400 },
+              tabStops: [
+                {
+                  type: TabStopType.RIGHT,
+                  position: 9000,
+                  leader: LeaderType.DOT,
+                },
+              ],
+              children: [
+                new TextRun({ text: `•  ${trade.name}`, size: 24, color: "334155" }),
+                new TextRun({ text: "\t", size: 24, color: "334155" }),
+                new TextRun({ text: `${pageEstimates[`trade-${trade.name}`] || 4}`, size: 24, color: "334155" }),
+              ]
+            })
+          );
+        }
+      }
+
+      // Add dynamic table of contents to children array
+      docChildren.push(...tocParagraphs);
+
+      for (const floor of projectMaps) {
+        const floorSpaces = customTopics.filter(t => (t.type === 'space' || !t.type) && (t.isDefault || t.floorId === floor.id || t.floorId === 'global'));
+        if (floorSpaces.length === 0) continue;
+        
+        let floorCount = 0;
+        const floorTitle = new Paragraph({
+          text: `${floor.name} 空間需求`,
+          heading: HeadingLevel.HEADING_2,
+          spacing: { before: 400, after: 400 },
+          pageBreakBefore: true,
+        });
+        const floorChildren: any[] = [floorTitle];
         
         for (const space of floorSpaces) {
           const reqs = allRequirements.filter(r => r.space === space.name || (!r.space && (r.title === space.name || r.title.includes(space.name))));
           const photos = spacePhotos.filter(p => p.space === space.name);
           
           if (reqs.length === 0 && photos.length === 0) continue;
+          floorCount++;
           
-          html += `<h3>空間：${space.name}</h3>\n`;
-          
+          const cellContent: any[] = [];
           if (reqs.length > 0) {
-            html += `<h4>需求項目：</h4>\n`;
+            cellContent.push(new Paragraph({
+              children: [new TextRun({ text: "需求項目：", bold: true, size: 28 })],
+              spacing: { after: 200 }
+            }));
             for (let i = 0; i < reqs.length; i++) {
               const req = reqs[i];
-              html += `<p><strong>${i + 1}. ${req.title}</strong></p>\n<ul>\n`;
+              cellContent.push(new Paragraph({
+                children: [
+                  new TextRun({ text: `${i + 1}. ${req.title}`, bold: true, size: 24 })
+                ],
+                spacing: { before: 200, after: 100 }
+              }));
               for (const pt of req.points) {
-                html += `<li>${pt}</li>\n`;
+                cellContent.push(new Paragraph({
+                  children: [new TextRun({ text: pt, size: 24 })],
+                  bullet: { level: 0 },
+                  spacing: { after: 100 }
+                }));
               }
-              html += `</ul>\n`;
+            }
+          }
+          if (photos.length > 0) {
+            cellContent.push(new Paragraph({
+              children: [new TextRun({ text: "空間照片：", bold: true, size: 28 })],
+              spacing: { before: 400, after: 200 }
+            }));
+            for (const photo of photos) {
+              const imgData = await getImageData(photo);
+              if (imgData) {
+                cellContent.push(new Paragraph({
+                  alignment: AlignmentType.CENTER,
+                  spacing: { before: 100, after: 100 },
+                  children: [
+                    new ImageRun({
+                      type: 'jpg',
+                      data: imgData.data,
+                      transformation: { width: imgData.width, height: imgData.height }
+                    })
+                  ]
+                }));
+              }
             }
           }
           
-          if (photos.length > 0) {
-            html += `<h4>空間照片：</h4>\n`;
-            for (const photo of photos) {
-              if (photo.url) {
-                // If the url is a base64 string or public URL, we can safely embed it in img tag
-                // If it's a thumbnail URL from Drive, it might require auth, but google drive HTML conversion usually handles their own URLs well
-                html += `<img src="${photo.url}" alt="Space Photo" />\n`;
-              }
-            }
-          }
+          const spaceTable = new Table({
+            columnWidths: [9360],
+            width: { size: 9360, type: WidthType.DXA },
+            margins: { top: 200, bottom: 200, left: 200, right: 200 },
+            borders: {
+              top: { style: BorderStyle.SINGLE, size: 4, color: "CBD5E1" },
+              bottom: { style: BorderStyle.SINGLE, size: 4, color: "CBD5E1" },
+              left: { style: BorderStyle.SINGLE, size: 4, color: "CBD5E1" },
+              right: { style: BorderStyle.SINGLE, size: 4, color: "CBD5E1" },
+              insideHorizontal: { style: BorderStyle.SINGLE, size: 4, color: "CBD5E1" }
+            },
+            rows: [
+              new TableRow({
+                children: [
+                  new TableCell({
+                    shading: { fill: "F1F5F9" },
+                    width: { size: 9360, type: WidthType.DXA },
+                    children: [
+                      new Paragraph({
+                        text: space.name,
+                        heading: HeadingLevel.HEADING_3,
+                      })
+                    ]
+                  })
+                ]
+              }),
+              new TableRow({
+                children: [
+                  new TableCell({
+                    width: { size: 9360, type: WidthType.DXA },
+                    children: cellContent.length > 0 ? cellContent : [new Paragraph({ text: "" })]
+                  })
+                ]
+              })
+            ]
+          });
+          floorChildren.push(spaceTable, new Paragraph({ text: "", spacing: { after: 400 } }));
+        }
+        if (floorCount > 0) {
+          docChildren.push(...floorChildren);
         }
       }
 
       if (globalTrades.length > 0) {
-        html += `<h2>全區分項工程需求</h2>\n`;
+        let tradeCount = 0;
+        const tradeTitle = new Paragraph({
+          text: "全區分項工程需求",
+          heading: HeadingLevel.HEADING_2,
+          spacing: { before: 400, after: 400 },
+          pageBreakBefore: true,
+        });
+        const tradeChildren: any[] = [tradeTitle];
+        
         for (const trade of globalTrades) {
           const reqs = allRequirements.filter(r => r.space === trade.name || (!r.space && (r.title === trade.name || r.title.includes(trade.name))));
           if (reqs.length === 0) continue;
+          tradeCount++;
           
-          html += `<h3>${trade.name}</h3>\n`;
+          const cellContent: any[] = [];
           for (let i = 0; i < reqs.length; i++) {
             const req = reqs[i];
-            html += `<p><strong>${i + 1}. ${req.title}</strong></p>\n<ul>\n`;
+            cellContent.push(new Paragraph({
+              children: [
+                new TextRun({ text: `${i + 1}. ${req.title}`, bold: true, size: 24 })
+              ],
+              spacing: { before: 200, after: 100 }
+            }));
             for (const pt of req.points) {
-              html += `<li>${pt}</li>\n`;
+              cellContent.push(new Paragraph({
+                children: [new TextRun({ text: pt, size: 24 })],
+                bullet: { level: 0 },
+                spacing: { after: 100 }
+              }));
             }
-            html += `</ul>\n`;
           }
+          
+          const tradeTable = new Table({
+            columnWidths: [9360],
+            width: { size: 9360, type: WidthType.DXA },
+            margins: { top: 200, bottom: 200, left: 200, right: 200 },
+            borders: {
+              top: { style: BorderStyle.SINGLE, size: 4, color: "CBD5E1" },
+              bottom: { style: BorderStyle.SINGLE, size: 4, color: "CBD5E1" },
+              left: { style: BorderStyle.SINGLE, size: 4, color: "CBD5E1" },
+              right: { style: BorderStyle.SINGLE, size: 4, color: "CBD5E1" },
+              insideHorizontal: { style: BorderStyle.SINGLE, size: 4, color: "CBD5E1" }
+            },
+            rows: [
+              new TableRow({
+                children: [
+                  new TableCell({
+                    shading: { fill: "F1F5F9" },
+                    width: { size: 9360, type: WidthType.DXA },
+                    children: [
+                      new Paragraph({
+                        text: trade.name,
+                        heading: HeadingLevel.HEADING_3,
+                      })
+                    ]
+                  })
+                ]
+              }),
+              new TableRow({
+                children: [
+                  new TableCell({
+                    width: { size: 9360, type: WidthType.DXA },
+                    children: cellContent.length > 0 ? cellContent : [new Paragraph({ text: "" })]
+                  })
+                ]
+              })
+            ]
+          });
+          tradeChildren.push(tradeTable, new Paragraph({ text: "", spacing: { after: 400 } }));
         }
+        if (tradeCount > 0) docChildren.push(...tradeChildren);
       }
 
-      html += `</body></html>`;
+      const doc = new Document({
+        features: {
+          updateFields: true,
+        },
+        sections: [{
+          properties: {},
+          footers: {
+            default: new Footer({
+              children: [
+                new Paragraph({
+                  alignment: AlignmentType.CENTER,
+                  children: [
+                     new TextRun({ children: ["- "] }),
+                     new TextRun({ children: [PageNumber.CURRENT] }),
+                     new TextRun({ children: [" -"] }),
+                  ]
+                })
+              ]
+            })
+          },
+          children: docChildren
+        }]
+      });
 
-      // 1. Upload HTML as multipart to create Google Doc
-      const boundary = 'foo_bar_baz_boundary';
+      const blob = await Packer.toBlob(doc);
       const metadata = {
         name: '細部設計需求書_屏東榮總龍泉分院B棟',
         mimeType: 'application/vnd.google-apps.document'
       };
       
-      const multipartRequestBody =
-        `--${boundary}\r\n` +
-        `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
-        `${JSON.stringify(metadata)}\r\n` +
-        `--${boundary}\r\n` +
-        `Content-Type: text/html; charset=UTF-8\r\n\r\n` +
-        `${html}\r\n` +
-        `--${boundary}--\r\n`;
+      const boundary = 'foo_bar_baz_boundary_docx';
+      const metadataStr = JSON.stringify(metadata);
+      const buffer = await blob.arrayBuffer();
+      const uint8Array = new Uint8Array(buffer);
+      
+      const preBuffer = new TextEncoder().encode(
+        `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadataStr}\r\n--${boundary}\r\nContent-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document\r\n\r\n`
+      );
+      const postBuffer = new TextEncoder().encode(`\r\n--${boundary}--\r\n`);
+      const combinedBuffer = new Uint8Array(preBuffer.length + uint8Array.length + postBuffer.length);
+      combinedBuffer.set(preBuffer, 0);
+      combinedBuffer.set(uint8Array, preBuffer.length);
+      combinedBuffer.set(postBuffer, preBuffer.length + uint8Array.length);
 
       const uploadRes = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
         method: 'POST',
@@ -3335,70 +3776,12 @@ function ReportView({
           'Authorization': `Bearer ${token}`,
           'Content-Type': `multipart/related; boundary=${boundary}`
         },
-        body: multipartRequestBody
+        body: combinedBuffer
       });
 
-      if (!uploadRes.ok) throw new Error('上傳 Docs 失敗');
+      if (!uploadRes.ok) throw new Error('上傳 Docs 失敗: ' + uploadRes.statusText);
       const fileData = await uploadRes.json();
       const documentId = fileData.id;
-
-      // 2. Add Footer & Page Number using Docs API
-      const createFooterRes = await fetch(`https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          requests: [
-            {
-              createFooter: {
-                type: 'DEFAULT'
-              }
-            }
-          ]
-        })
-      });
-
-      if (createFooterRes.ok) {
-        const footerData = await createFooterRes.json();
-        const footerId = footerData.replies?.[0]?.createFooter?.footerId;
-
-        if (footerId) {
-          await fetch(`https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              requests: [
-                {
-                  insertPageNumber: {
-                    location: {
-                      segmentId: footerId,
-                      index: 0
-                    }
-                  }
-                },
-                {
-                  updateParagraphStyle: {
-                    range: {
-                      segmentId: footerId,
-                      startIndex: 0,
-                      endIndex: 1
-                    },
-                    paragraphStyle: {
-                      alignment: 'CENTER'
-                    },
-                    fields: 'alignment'
-                  }
-                }
-              ]
-            })
-          });
-        }
-      }
 
       setNotification({ message: '成功匯出 Google Docs 細部設計需求書！可至雲端硬碟查看。', type: 'success' });
       window.open(`https://docs.google.com/document/d/${documentId}/edit`, '_blank');
