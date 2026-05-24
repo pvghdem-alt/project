@@ -3443,133 +3443,29 @@ function ReportView({
           pageBreakBefore: true,
           text: "文件目錄",
           heading: HeadingLevel.HEADING_1,
-          spacing: { after: 300 }
+          spacing: { before: 200, after: 400 }
         }),
-        new Paragraph({
-          text: "【自動目錄】（推薦：下載至 Microsoft Word 或 WPS 中開啟後，滑鼠右鍵點擊該區域選擇『更新欄位(Update Field)』，即可自動掃描整份文件，生成 100% 精確的圖片與內文分頁，並具備完美對齊的虛線前導點）",
-          spacing: { before: 100, after: 100 },
-          children: [
-            new TextRun({ text: "自動目錄功能組：", bold: true, color: "1E3A8A", size: 20 })
-          ]
-        }),
-        new TableOfContents("自動目錄", {
+        new TableOfContents("目錄內容", {
           hyperlink: true,
-          headingStyleRange: "1-3",
+          headingStyleRange: "2-3",
         }),
         new Paragraph({
           text: "",
-          spacing: { before: 400, after: 400 }
-        }),
-        new Paragraph({
-          text: "【手動預估目錄】（方便網頁、Google Drive 直接看，此頁數為系統基於預估行數推算）",
-          heading: HeadingLevel.HEADING_2,
-          spacing: { before: 200, after: 150 }
+          spacing: { after: 200 }
         })
       ];
-
-      let tocIndex = 1;
-      for (const floor of projectMaps) {
-        const floorSpaces = customTopics.filter(t => (t.type === 'space' || !t.type) && (t.isDefault || t.floorId === floor.id || t.floorId === 'global'));
-        if (floorSpaces.length === 0) continue;
-
-        tocParagraphs.push(
-          new Paragraph({
-            spacing: { before: 200, after: 80 },
-            tabStops: [
-              {
-                type: TabStopType.RIGHT,
-                position: 8200,
-                leader: LeaderType.DOT,
-              },
-            ],
-            children: [
-              new TextRun({ text: `${tocIndex++}. ${floor.name} 空間需求`, bold: true, size: 28, color: "1E3A8A" }),
-              new Tab(),
-              new TextRun({ text: `${pageEstimates[`floor-${floor.id}`] || 4}`, bold: true, size: 28, color: "1E3A8A" }),
-            ]
-          })
-        );
-
-        for (const space of floorSpaces) {
-          const reqs = allRequirements.filter(r => r.space === space.name || (!r.space && (r.title === space.name || r.title.includes(space.name))));
-          const photos = spacePhotos.filter(p => p.space === space.name);
-          if (reqs.length === 0 && photos.length === 0) continue;
-
-          tocParagraphs.push(
-            new Paragraph({
-              spacing: { after: 60 },
-              indent: { left: 400 },
-              tabStops: [
-                {
-                  type: TabStopType.RIGHT,
-                  position: 8200,
-                  leader: LeaderType.DOT,
-                },
-              ],
-              children: [
-                new TextRun({ text: `•  ${space.name}`, size: 24, color: "334155" }),
-                new Tab(),
-                new TextRun({ text: `${pageEstimates[`space-${floor.id}-${space.name}`] || 4}`, size: 24, color: "334155" }),
-              ]
-            })
-          );
-        }
-      }
-
-      if (globalTrades.length > 0) {
-        tocParagraphs.push(
-          new Paragraph({
-            spacing: { before: 300, after: 80 },
-            tabStops: [
-              {
-                type: TabStopType.RIGHT,
-                position: 8200,
-                leader: LeaderType.DOT,
-              },
-            ],
-            children: [
-              new TextRun({ text: `${tocIndex++}. 全區分項工程需求`, bold: true, size: 28, color: "1E3A8A" }),
-              new Tab(),
-              new TextRun({ text: `${pageEstimates[`trades-header`] || 4}`, bold: true, size: 28, color: "1E3A8A" }),
-            ]
-          })
-        );
-
-        for (const trade of globalTrades) {
-          const reqs = allRequirements.filter(r => r.space === trade.name || (!r.space && (r.title === trade.name || r.title.includes(trade.name))));
-          if (reqs.length === 0) continue;
-
-          tocParagraphs.push(
-            new Paragraph({
-              spacing: { after: 60 },
-              indent: { left: 400 },
-              tabStops: [
-                {
-                  type: TabStopType.RIGHT,
-                  position: 8200,
-                  leader: LeaderType.DOT,
-                },
-              ],
-              children: [
-                new TextRun({ text: `•  ${trade.name}`, size: 24, color: "334155" }),
-                new Tab(),
-                new TextRun({ text: `${pageEstimates[`trade-${trade.name}`] || 4}`, size: 24, color: "334155" }),
-              ]
-            })
-          );
-        }
-      }
 
       // Add dynamic table of contents to children array
       docChildren.push(...tocParagraphs);
 
+      let secIndex = 1;
       for (const floor of projectMaps) {
         const floorSpaces = customTopics.filter(t => (t.type === 'space' || !t.type) && (t.isDefault || t.floorId === floor.id || t.floorId === 'global'));
         if (floorSpaces.length === 0) continue;
         
         let floorCount = 0;
         const floorTitle = new Paragraph({
-          text: `${floor.name} 空間需求`,
+          text: `${secIndex++}. ${floor.name} 空間需求`,
           heading: HeadingLevel.HEADING_2,
           spacing: { before: 400, after: 400 },
           pageBreakBefore: true,
@@ -3675,7 +3571,7 @@ function ReportView({
       if (globalTrades.length > 0) {
         let tradeCount = 0;
         const tradeTitle = new Paragraph({
-          text: "全區分項工程需求",
+          text: `${secIndex++}. 全區分項工程需求`,
           heading: HeadingLevel.HEADING_2,
           spacing: { before: 400, after: 400 },
           pageBreakBefore: true,
@@ -3749,6 +3645,38 @@ function ReportView({
       const doc = new Document({
         features: {
           updateFields: true,
+        },
+        styles: {
+          paragraphStyles: [
+            {
+              id: "toc 1",
+              name: "toc 1",
+              basedOn: "Normal",
+              next: "Normal",
+              run: {
+                bold: true,
+                size: 28, // 14pt (matches 28 in docx)
+                color: "1E3A8A", // Deep Navy
+              },
+              paragraph: {
+                spacing: { before: 180, after: 80 }
+              }
+            },
+            {
+              id: "toc 2",
+              name: "toc 2",
+              basedOn: "Normal",
+              next: "Normal",
+              run: {
+                size: 24, // 12pt (matches 24 in docx)
+                color: "334155", // Slate-700
+              },
+              paragraph: {
+                spacing: { before: 80, after: 40 },
+                indent: { left: 400 } // indent to align beautifully
+              }
+            }
+          ]
         },
         sections: [{
           properties: {
