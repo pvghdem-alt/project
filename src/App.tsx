@@ -544,6 +544,30 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  // Load draft for the selected space/floor whenever it changes
+  useEffect(() => {
+    if (selectedSpace) {
+      const draftKey = `note_draft_${activeFloor}_${selectedSpace}`;
+      const savedDraft = localStorage.getItem(draftKey) || '';
+      setNewNote(savedDraft);
+    } else {
+      setNewNote('');
+    }
+  }, [selectedSpace, activeFloor]);
+
+  // Unified helper to change the note content and save draft immediately
+  const handleNoteChange = (text: string) => {
+    setNewNote(text);
+    if (selectedSpace) {
+      const draftKey = `note_draft_${activeFloor}_${selectedSpace}`;
+      if (text.trim()) {
+        localStorage.setItem(draftKey, text);
+      } else {
+        localStorage.removeItem(draftKey);
+      }
+    }
+  };
+
   const handleAddNote = async () => {
     if (!newNote.trim() || !selectedSpace) return;
     const noteData = {
@@ -559,6 +583,9 @@ export default function App() {
     try {
       await addDoc(collection(db, 'notes'), noteData);
       setNewNote('');
+      if (selectedSpace) {
+        localStorage.removeItem(`note_draft_${activeFloor}_${selectedSpace}`);
+      }
       setNotification({ message: '紀錄已儲存！', type: 'success' });
       setTimeout(() => setNotification(null), 2000);
     } catch (err) {
@@ -1263,9 +1290,21 @@ export default function App() {
 
   useEffect(() => {
     const handleGlobalPaste = (e: ClipboardEvent) => {
-      const target = e.target as HTMLElement;
-      const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';
-      if (selectedSpace && !isInput) {
+      if (!selectedSpace) return;
+      
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      let hasImage = false;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf('image') !== -1) {
+          hasImage = true;
+          break;
+        }
+      }
+
+      if (hasImage) {
+        e.preventDefault();
         handlePhotoUpload(e);
       }
     };
@@ -2274,9 +2313,11 @@ export default function App() {
                                 </div>
                               ) : (
                                 <div className="flex flex-col items-center justify-center p-20 border-2 border-dashed border-slate-200 rounded-3xl bg-slate-50/50">
-                                  <ImageIcon size={48} className="text-slate-300 mb-4" />
+                                  <ImageIcon size={48} className="text-slate-300 mb-4 animate-bounce" />
                                   <p className="text-lg text-slate-400 font-bold font-sans">尚無空間照片</p>
-                                  <p className="text-xs text-slate-400 mt-1">點擊上方按鈕開始建立空間現況紀錄</p>
+                                  <p className="text-xs text-slate-400 mt-1 text-center max-w-sm">
+                                    點擊上方按鈕，或「直接複製圖片並在此處按 <kbd className="px-1.5 py-0.5 bg-slate-100 border border-slate-200 rounded text-[10px] font-mono font-bold text-slate-500 shadow-sm">Ctrl + V</kbd> 貼上」即可上傳至雲端。
+                                  </p>
                                 </div>
                               )}
                             </div>
@@ -2360,7 +2401,7 @@ export default function App() {
                     </div>
                     <textarea 
                       value={newNote}
-                      onChange={(e) => setNewNote(e.target.value)}
+                      onChange={(e) => handleNoteChange(e.target.value)}
                       placeholder={user ? "請描述空間需求：如插座與弱電配置、呼叫系統、設備機電與給排水需求，及櫥櫃水槽樣式。您可以用白話描述，AI 會協助潤飾..." : "請先登入後再提供建議"}
                       disabled={!user}
                       className={`w-full h-32 p-4 border border-slate-200 rounded-2xl text-base text-slate-900 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/5 shadow-inner outline-none resize-none transition-all placeholder:text-slate-400 ${user ? 'bg-slate-50 text-slate-900' : 'bg-slate-100 text-slate-400 cursor-not-allowed'}`}
