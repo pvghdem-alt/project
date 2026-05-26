@@ -3573,12 +3573,21 @@ function ReportView({
         
         for (const trade of globalTrades) {
           const reqs = allRequirements.filter(r => r.space === trade.name || (!r.space && (r.title === trade.name || r.title.includes(trade.name))));
-          if (reqs.length === 0) continue;
+          const photos = spacePhotos.filter(p => p.space === trade.name);
           
-          let tradeLines = 3;
-          for (const req of reqs) {
-            tradeLines += 1;
-            tradeLines += req.points.length;
+          if (reqs.length === 0 && photos.length === 0) continue;
+          
+          let tradeLines = 4;
+          if (reqs.length > 0) {
+            tradeLines += 2;
+            for (const req of reqs) {
+              tradeLines += 1;
+              tradeLines += req.points.length;
+            }
+          }
+          if (photos.length > 0) {
+            tradeLines += 2;
+            tradeLines += photos.length * 12;
           }
           
           if (estLines + tradeLines > LINES_PER_PAGE) {
@@ -3736,24 +3745,53 @@ function ReportView({
         
         for (const trade of globalTrades) {
           const reqs = allRequirements.filter(r => r.space === trade.name || (!r.space && (r.title === trade.name || r.title.includes(trade.name))));
-          if (reqs.length === 0) continue;
+          const photos = spacePhotos.filter(p => p.space === trade.name);
+          if (reqs.length === 0 && photos.length === 0) continue;
           tradeCount++;
           
           const cellContent: any[] = [];
-          for (let i = 0; i < reqs.length; i++) {
-            const req = reqs[i];
+          if (reqs.length > 0) {
             cellContent.push(new Paragraph({
-              children: [
-                new TextRun({ text: `${i + 1}. ${req.title}`, bold: true, size: 24 })
-              ],
-              spacing: { before: 200, after: 100 }
+              children: [new TextRun({ text: "需求項目：", bold: true, size: 28 })],
+              spacing: { after: 200 }
             }));
-            for (const pt of req.points) {
+            for (let i = 0; i < reqs.length; i++) {
+              const req = reqs[i];
               cellContent.push(new Paragraph({
-                children: [new TextRun({ text: pt, size: 24 })],
-                bullet: { level: 0 },
-                spacing: { after: 100 }
+                children: [
+                  new TextRun({ text: `${i + 1}. ${req.title}`, bold: true, size: 24 })
+                ],
+                spacing: { before: 200, after: 100 }
               }));
+              for (const pt of req.points) {
+                cellContent.push(new Paragraph({
+                  children: [new TextRun({ text: pt, size: 24 })],
+                  bullet: { level: 0 },
+                  spacing: { after: 100 }
+                }));
+              }
+            }
+          }
+          
+          if (photos.length > 0) {
+            cellContent.push(new Paragraph({
+              children: [new TextRun({ text: "空間照片：", bold: true, size: 28 })],
+              spacing: { before: 400, after: 200 }
+            }));
+            for (const photo of photos) {
+              const imgData = await getImageData(photo);
+              if (imgData) {
+                cellContent.push(new Paragraph({
+                  alignment: AlignmentType.CENTER,
+                  spacing: { before: 100, after: 100 },
+                  children: [
+                    new ImageRun({
+                      data: imgData,
+                      transformation: { width: 500, height: 375 },
+                    }),
+                  ],
+                }));
+              }
             }
           }
           
