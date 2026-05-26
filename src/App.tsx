@@ -3320,10 +3320,10 @@ export default function App() {
                      <button 
                        onClick={(e) => {
                          e.stopPropagation();
-                         const currentIndex = spacePhotos.findIndex(p => p.url === selectedLightboxPhoto);
-                         if (currentIndex > -1 && spacePhotos.length > 0) {
-                           const nextIndex = (currentIndex - 1 + spacePhotos.length) % spacePhotos.length;
-                           setSelectedLightboxPhoto(spacePhotos[nextIndex].url);
+                         const currentIndex = currentSpacePhotos.findIndex(p => p.url === selectedLightboxPhoto);
+                         if (currentIndex > -1 && currentSpacePhotos.length > 0) {
+                           const nextIndex = (currentIndex - 1 + currentSpacePhotos.length) % currentSpacePhotos.length;
+                           setSelectedLightboxPhoto(currentSpacePhotos[nextIndex].url);
                          }
                        }}
                        className="absolute left-4 md:left-6 p-3 text-white bg-slate-950/70 hover:bg-slate-950 hover:scale-105 transition-all border border-white/10 rounded-full shadow-2xl z-20 hover:text-blue-400 active:scale-95"
@@ -3335,10 +3335,10 @@ export default function App() {
                      <button 
                        onClick={(e) => {
                          e.stopPropagation();
-                         const currentIndex = spacePhotos.findIndex(p => p.url === selectedLightboxPhoto);
-                         if (currentIndex > -1 && spacePhotos.length > 0) {
-                           const nextIndex = (currentIndex + 1) % spacePhotos.length;
-                           setSelectedLightboxPhoto(spacePhotos[nextIndex].url);
+                         const currentIndex = currentSpacePhotos.findIndex(p => p.url === selectedLightboxPhoto);
+                         if (currentIndex > -1 && currentSpacePhotos.length > 0) {
+                           const nextIndex = (currentIndex + 1) % currentSpacePhotos.length;
+                           setSelectedLightboxPhoto(currentSpacePhotos[nextIndex].url);
                          }
                        }}
                        className="absolute right-4 md:right-6 p-3 text-white bg-slate-950/70 hover:bg-slate-950 hover:scale-105 transition-all border border-white/10 rounded-full shadow-2xl z-20 hover:text-blue-400 active:scale-95"
@@ -3357,14 +3357,14 @@ export default function App() {
                </div>
 
                {/* Indicator badge */}
-               {spacePhotos.length > 0 && spacePhotos.findIndex(p => p.url === selectedLightboxPhoto) > -1 && (
+               {currentSpacePhotos.length > 0 && currentSpacePhotos.findIndex(p => p.url === selectedLightboxPhoto) > -1 && (
                  <div className="mt-4 text-white/90 bg-slate-950/80 px-4 py-2 rounded-full border border-white/10 tracking-widest text-xs font-black shadow-xl flex items-center gap-2">
                    <span>照片</span>
                    <span className="text-blue-400">
-                     {spacePhotos.findIndex(p => p.url === selectedLightboxPhoto) + 1}
+                     {currentSpacePhotos.findIndex(p => p.url === selectedLightboxPhoto) + 1}
                    </span>
                    <span className="opacity-40">/</span>
-                   <span>{spacePhotos.length}</span>
+                   <span>{currentSpacePhotos.length}</span>
                  </div>
                )}
             </motion.div>
