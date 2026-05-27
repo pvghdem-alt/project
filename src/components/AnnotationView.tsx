@@ -213,6 +213,138 @@ export default function AnnotationView({
     }
   };
 
+  const getOrCreateAnnotationFolder = async (token: string) => {
+    const rootName = "B棟3F、5F改建工程細部設計需求照片";
+    const subName = "平面圖底圖";
+    
+    const findOrCreateFolder = async (name: string, parentId?: string) => {
+      let queryStr = `name='${name.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+      if (parentId) {
+        queryStr += ` and '${parentId}' in parents`;
+      } else {
+        queryStr += ` and 'root' in parents`;
+      }
+      
+      const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(queryStr)}&fields=files(id,name)`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const searchData = await searchRes.json();
+      if (searchData.files && searchData.files.length > 0) {
+        return searchData.files[0].id;
+      }
+      
+      const body: any = {
+        name,
+        mimeType: 'application/vnd.google-apps.folder'
+      };
+      if (parentId) {
+        body.parents = [parentId];
+      }
+      
+      const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+      });
+      
+      if (!createRes.ok) {
+        const errText = await createRes.text();
+        throw new Error(`建立資料夾 '${name}' 失敗: ${errText}`);
+      }
+      const data = await createRes.json();
+      return data.id;
+    };
+
+    const rootId = await findOrCreateFolder(rootName);
+    const subId = await findOrCreateFolder(subName, rootId);
+    return subId;
+  };
+
+  const uploadFloorPlanToDrive = async (token: string, file: File) => {
+    setIsUploading(true);
+    setNotification({ message: '正在建立雲端硬碟平面圖目錄...', type: 'ai' });
+    try {
+      const folderId = await getOrCreateAnnotationFolder(token);
+      
+      const filename = `${floorId}_平面圖_${new Date().getTime()}.${file.name.split('.').pop() || 'png'}`;
+      setNotification({ message: '正在上傳完整高畫質平面圖至 Google Drive...', type: 'ai' });
+
+      // 1. Create file metadata
+      const metaResponse = await fetch('https://www.googleapis.com/drive/v3/files', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          name: filename,
+          mimeType: file.type,
+          parents: [folderId]
+        })
+      });
+
+      if (!metaResponse.ok) {
+        const errText = await metaResponse.text();
+        throw new Error(`建立雲端檔案紀錄失敗: ${errText}`);
+      }
+
+      const fileData = await metaResponse.json();
+      const fileId = fileData.id;
+
+      // 2. Upload raw file content (NO compression for maximum quality!)
+      const mediaResponse = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': file.type
+        },
+        body: file
+      });
+
+      if (!mediaResponse.ok) {
+        const errText = await mediaResponse.text();
+        throw new Error(`上傳照片內容失敗: ${errText}`);
+      }
+
+      // 3. Share permissions so anybody can read it
+      try {
+        await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            role: 'reader',
+            type: 'anyone'
+          })
+        });
+      } catch (permsErr) {
+        console.warn("Could not share file permissions:", permsErr);
+      }
+
+      // Save high resolution cached thumbnail url from google drive (sz=w3000 provides pristine crisp layout)
+      const publicUrl = `https://drive.google.com/thumbnail?id=${fileId}&sz=w3000`;
+
+      // 4. Update the map document in firestore
+      const mapRef = doc(db, 'maps', floorId);
+      await updateDoc(mapRef, { 
+        floorPlan2DUrl: publicUrl,
+        floorPlan2DDriveFileId: fileId 
+      });
+
+      setNotification({ message: '無損高畫質平面圖已成功上傳至雲端硬碟！', type: 'success' });
+    } catch (err: any) {
+      console.error(err);
+      setNotification({ message: '平面圖上傳失敗: ' + (err.message || '未知錯誤'), type: 'error' });
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   const handleFloorPlanUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !floorId || !projectMap) return;
@@ -221,27 +353,15 @@ export default function AnnotationView({
         return;
     }
     
-    setIsUploading(true);
-    try {
-      const compressed = await imageCompression(file, {
-        maxSizeMB: 0.8,
-        maxWidthOrHeight: 2000,
-        useWebWorker: true
+    if (!driveAccessToken) {
+      setNotification({ message: '提示：底圖將無損上傳至雲端硬碟。正在引導 Google 帳號授權...', type: 'ai' });
+      initiateGoogleOAuth((newToken: string) => {
+        uploadFloorPlanToDrive(newToken, file);
       });
-      const reader = new FileReader();
-      reader.onloadend = async () => {
-         const url = reader.result as string;
-         const mapRef = doc(db, 'maps', floorId);
-         await updateDoc(mapRef, { floorPlan2DUrl: url });
-         setNotification({ message: '平面圖上傳成功', type: 'success' });
-         setIsUploading(false);
-      };
-      reader.readAsDataURL(compressed);
-    } catch (err) {
-      console.error(err);
-      setNotification({ message: '照片處理失敗: ' + (err as any).message, type: 'error' });
-      setIsUploading(false);
+      return;
     }
+
+    await uploadFloorPlanToDrive(driveAccessToken, file);
   };
 
   return (
