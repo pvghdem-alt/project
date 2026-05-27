@@ -1,8 +1,9 @@
-import React, { useRef, useState, useEffect, MouseEvent as ReactMouseEvent, TouchEvent as ReactTouchEvent, PointerEvent as ReactPointerEvent } from 'react';
-import { UploadCloud, Save, RotateCcw, Trash2, PenTool, Eraser, Map, Loader2 } from 'lucide-react';
+import React, { useRef, useState, useEffect, PointerEvent as ReactPointerEvent } from 'react';
+import { UploadCloud, Save, RotateCcw, Trash2, PenTool, Eraser, Map, Loader2, Hand } from 'lucide-react';
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import imageCompression from 'browser-image-compression';
+import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
 
 interface Point { x: number; y: number; }
 interface Line { color: string; width: number; points: Point[]; }
@@ -22,7 +23,8 @@ export default function AnnotationView({
   const [isSaving, setIsSaving] = useState(false);
   const [color, setColor] = useState('#ef4444');
   const [lineWidth, setLineWidth] = useState(3);
-  const [mode, setMode] = useState<'draw' | 'erase'>('draw');
+  const [mode, setMode] = useState<'draw' | 'erase' | 'pan'>('draw');
+  const [activePointerId, setActivePointerId] = useState<number | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -49,8 +51,6 @@ export default function AnnotationView({
     if (floorId && selectedSpace) {
       setLines([]); // clear on space switch
       fetchAnnotations();
-      // Delay redraw to ensure background image loads
-      setTimeout(redrawCanvas, 500);
     }
     return () => { isMounted = false; };
   }, [floorId, selectedSpace]);
@@ -68,16 +68,23 @@ export default function AnnotationView({
 
   const redrawCanvas = () => {
     const canvas = canvasRef.current;
-    const container = containerRef.current;
-    if (!canvas || !container) return;
+    if (!canvas) return;
     
-    // Set internal canvas resolution to match its displayed DOM size
-    canvas.width = container.clientWidth;
-    canvas.height = container.clientHeight;
+    // We update canvas real resolution to match its CSS dimensions
+    const dpr = window.devicePixelRatio || 1;
+    const cw = canvas.clientWidth;
+    const ch = canvas.clientHeight;
+    
+    if (cw === 0 || ch === 0) return;
+
+    canvas.width = cw * dpr;
+    canvas.height = ch * dpr;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.scale(dpr, dpr);
+    
+    ctx.clearRect(0, 0, cw, ch);
     
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -91,10 +98,10 @@ export default function AnnotationView({
       ctx.lineWidth = line.width;
       
       const first = line.points[0];
-      ctx.moveTo(first.x * canvas.width, first.y * canvas.height);
+      ctx.moveTo(first.x * cw, first.y * ch);
       for (let i = 1; i < line.points.length; i++) {
          const p = line.points[i];
-         ctx.lineTo(p.x * canvas.width, p.y * canvas.height);
+         ctx.lineTo(p.x * cw, p.y * ch);
       }
       ctx.stroke();
     }
@@ -106,14 +113,17 @@ export default function AnnotationView({
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    return { x: x / canvas.width, y: y / canvas.height };
+    return { x: x / rect.width, y: y / rect.height };
   };
 
   const handlePointerDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
-    // Only allow drawing with Primary touch/pen or left mouse click
+    if (mode === 'pan') return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (activePointerId !== null) return;
+    
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
+    setActivePointerId(e.pointerId);
     
     const coord = getCoordinates(e);
     if (!coord) return;
@@ -126,7 +136,7 @@ export default function AnnotationView({
   };
 
   const handlePointerMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (!currentLine) return;
+    if (mode === 'pan' || !currentLine || e.pointerId !== activePointerId) return;
     const coord = getCoordinates(e);
     if (!coord) return;
     setCurrentLine({
@@ -136,37 +146,37 @@ export default function AnnotationView({
   };
 
   const handlePointerUp = (e: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (!currentLine) return;
+    if (mode === 'pan' || e.pointerId !== activePointerId) return;
     e.currentTarget.releasePointerCapture(e.pointerId);
+    setActivePointerId(null);
     
+    if (!currentLine) return;
+
     if (mode === 'erase') {
-       // if erase mode, we filter lines that intersect with currentLine
        handleErase(currentLine);
        setCurrentLine(null);
     } else {
-       setLines([...lines, currentLine]);
+       setLines(prev => {
+         const newLines = [...prev, currentLine];
+         autoSave(newLines);
+         return newLines;
+       });
        setCurrentLine(null);
-       // Auto-save debounced? Let's just user explicitly save or auto save upon up
-       autoSave([...lines, currentLine]);
     }
   };
 
   const handleErase = (eraseStroke: Line) => {
-    // Check intersection
-    // A simplified approach: roughly check bounds or point distances
     const newLines = lines.filter(line => !intersectLine(line, eraseStroke));
     setLines(newLines);
     autoSave(newLines);
   };
 
   const intersectLine = (l1: Line, l2: Line) => {
-    // simple O(N*M) distance check
     if (l1.points.length === 0 || l2.points.length === 0) return false;
     for (const p1 of l1.points) {
       for (const p2 of l2.points) {
          const dx = p1.x - p2.x;
          const dy = p1.y - p2.y;
-         // since x,y are ratios, we roughly check squared distance
          if (dx*dx + dy*dy < 0.001) {
             return true;
          }
@@ -213,17 +223,14 @@ export default function AnnotationView({
     
     setIsUploading(true);
     try {
-      // Compress
       const compressed = await imageCompression(file, {
         maxSizeMB: 0.8,
-        maxWidthOrHeight: 1600,
+        maxWidthOrHeight: 2000,
         useWebWorker: true
       });
-      // Convert to base64
       const reader = new FileReader();
       reader.onloadend = async () => {
          const url = reader.result as string;
-         // Save to project_maps
          const mapRef = doc(db, 'maps', floorId);
          await updateDoc(mapRef, { floorPlan2DUrl: url });
          setNotification({ message: '平面圖上傳成功', type: 'success' });
@@ -287,6 +294,13 @@ export default function AnnotationView({
                    >
                      <Eraser size={18} />
                    </button>
+                   <button 
+                     onClick={() => setMode('pan')}
+                     className={`p-2 rounded-md transition-colors ${mode === 'pan' ? 'bg-white shadow-sm text-green-600' : 'text-slate-500 hover:text-slate-700'}`}
+                     title="移動位置/縮放"
+                   >
+                     <Hand size={18} />
+                   </button>
                    <div className="w-px h-6 bg-slate-200 mx-2" />
                    {/* Colors */}
                    <div className="flex gap-2 px-2">
@@ -312,24 +326,43 @@ export default function AnnotationView({
              </div>
              
              {/* Canvas Container */}
-             <div ref={containerRef} className="flex-1 relative bg-[#e5e5ea] overflow-hidden flex items-center justify-center select-none touch-none">
-                <img 
-                  ref={imageRef}
-                  src={projectMap.floorPlan2DUrl}
-                  alt={`${floorId} Floor Plan`}
-                  className="absolute inset-0 w-full h-full object-contain pointer-events-none"
-                  onLoad={redrawCanvas}
-                />
-                <canvas 
-                  ref={canvasRef}
-                  className="absolute inset-0 w-full h-full cursor-crosshair touch-none"
-                  onPointerDown={handlePointerDown}
-                  onPointerMove={handlePointerMove}
-                  onPointerUp={handlePointerUp}
-                  onPointerOut={handlePointerUp}
-                  onPointerCancel={handlePointerUp}
-                  style={{ touchAction: 'none' }} // Prevent scrolling on mobile while drawing
-                />
+             <div className="flex-1 overflow-hidden bg-[#e5e5ea]">
+                <TransformWrapper
+                   panning={{ disabled: mode !== 'pan' }}
+                   pinch={{ disabled: false }}
+                   wheel={{ step: 0.1 }}
+                   initialScale={1}
+                   minScale={0.5}
+                   maxScale={5}
+                >
+                   {({ zoomIn, zoomOut, resetTransform }) => (
+                     <TransformComponent wrapperClass="w-full h-full" contentClass="w-full h-full flex items-center justify-center">
+                        <div className="relative shadow-lg" style={{ display: 'inline-block' }}>
+                           <img 
+                             ref={imageRef}
+                             src={projectMap.floorPlan2DUrl}
+                             alt={`${floorId} Floor Plan`}
+                             className="pointer-events-none select-none block max-w-full max-h-full rounded-sm"
+                             style={{ objectFit: 'contain' }}
+                             onLoad={() => {
+                                // Wait a tick for layout to settle then redraw
+                                setTimeout(redrawCanvas, 50);
+                             }}
+                           />
+                           <canvas 
+                             ref={canvasRef}
+                             className={`absolute inset-0 w-full h-full touch-none ${mode === 'pan' ? 'pointer-events-none' : 'cursor-crosshair'}`}
+                             onPointerDown={handlePointerDown}
+                             onPointerMove={handlePointerMove}
+                             onPointerUp={handlePointerUp}
+                             onPointerOut={handlePointerUp}
+                             onPointerCancel={handlePointerUp}
+                             style={{ touchAction: 'none' }}
+                           />
+                        </div>
+                     </TransformComponent>
+                   )}
+                </TransformWrapper>
              </div>
           </div>
        )}
