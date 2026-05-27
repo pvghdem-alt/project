@@ -41,11 +41,13 @@ import {
   ChevronLeft,
   Camera,
   UploadCloud,
-  Settings
+  Settings,
+  PenTool
 } from 'lucide-react';
 import { motion, AnimatePresence, Reorder } from 'motion/react';
 import Markdown from 'react-markdown';
 import imageCompression from 'browser-image-compression';
+import AnnotationView from './components/AnnotationView';
 import { DESIGN_SPECS } from './constants';
 import { askAiAssistant, setCustomApiKey, analyzeNotesToRequirements, deduplicateData, analyzeFileToSpecs } from './geminiService';
 import { db, auth } from './lib/firebase';
@@ -125,6 +127,8 @@ interface ProjectMap {
   viewerUrl: string;
   type: '3d' | 'image';
   order: number;
+  floorPlan2DUrl?: string;
+  floorPlan2DDriveFileId?: string;
 }
 
 interface RequirementCategory {
@@ -292,7 +296,7 @@ export default function App() {
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string, name: string, type: 'topic' | 'floor' | 'requirement' } | null>(null);
   const [pendingAiResult, setPendingAiResult] = useState<{ requirements: any[], summary: any, sourceNotes: any[] } | null>(null);
   const [selectedProposedPoints, setSelectedProposedPoints] = useState<Record<string, string[]>>({});
-  const [activeMainTab, setActiveMainTab] = useState<'discussion' | 'photos' | 'map' | 'report'>('discussion');
+  const [activeMainTab, setActiveMainTab] = useState<'discussion' | 'photos' | 'map' | 'report' | 'plan'>('discussion');
   const [rightSidebarWidth, setRightSidebarWidth] = useState(400);
   const [expandedReqIds, setExpandedReqIds] = useState<string[]>([]);
   const [collapsedChatIndices, setCollapsedChatIndices] = useState<number[]>([]);
@@ -2153,6 +2157,17 @@ export default function App() {
                       <MapIcon size={16} />
                       配置圖
                     </button>
+                    <button 
+                      onClick={() => setActiveMainTab('plan')}
+                      className={`flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold transition-all duration-300 ${
+                        activeMainTab === 'plan' 
+                          ? 'bg-white text-blue-600 shadow-lg' 
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      <PenTool size={16} />
+                      平面圖註記
+                    </button>
                  </div>
                  
                  {activeMainTab === 'discussion' && selectedSpace && !isNursingDept && (
@@ -2224,7 +2239,7 @@ export default function App() {
                         <div className="flex items-center justify-between pb-4 border-b border-slate-100 shrink-0">
                           <div>
                             <h4 className="text-xs font-black text-blue-600 uppercase tracking-widest mb-1">
-                              {activeMainTab === 'photos' ? '空間視覺參考' : '空間細部規範'}
+                              {activeMainTab === 'photos' ? '空間視覺參考' : activeMainTab === 'plan' ? '平面圖標註' : '空間細部規範'}
                             </h4>
                             <h3 className="text-3xl font-black text-slate-900 tracking-tight">{selectedSpace}</h3>
                           </div>
@@ -2342,6 +2357,16 @@ export default function App() {
                               )}
                             </div>
                           </div>
+                        ) : activeMainTab === 'plan' ? (
+                          <AnnotationView 
+                            floorId={activeFloor}
+                            selectedSpace={selectedSpace}
+                            projectMap={activeMap}
+                            driveAccessToken={driveAccessToken}
+                            initiateGoogleOAuth={initiateGoogleOAuth}
+                            user={user}
+                            setNotification={setNotification}
+                          />
                         ) : (
                           /* Engineering Specs Section */
                           <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-2">
@@ -3786,9 +3811,10 @@ function ReportView({
                   spacing: { before: 100, after: 100 },
                   children: [
                     new ImageRun({
-                      data: imgData,
-                      transformation: { width: 500, height: 375 },
-                    }),
+                      type: 'jpg',
+                      data: imgData.data,
+                      transformation: { width: imgData.width, height: imgData.height }
+                    })
                   ],
                 }));
               }
