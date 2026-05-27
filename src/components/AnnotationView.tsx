@@ -1,12 +1,12 @@
 import React, { useRef, useState, useEffect, PointerEvent as ReactPointerEvent } from 'react';
-import { UploadCloud, Save, RotateCcw, Trash2, PenTool, Eraser, Map, Loader2, Hand } from 'lucide-react';
+import { UploadCloud, Save, RotateCcw, Trash2, PenTool, Eraser, Map, Loader2, Hand, Square } from 'lucide-react';
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import imageCompression from 'browser-image-compression';
 import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
 
-interface Point { x: number; y: number; }
-interface Line { color: string; width: number; points: Point[]; }
+interface Point { x: number; y: number; pressure?: number; }
+interface Line { color: string; width: number; points: Point[]; isRect?: boolean; }
 
 export default function AnnotationView({
   floorId,
@@ -23,7 +23,7 @@ export default function AnnotationView({
   const [isSaving, setIsSaving] = useState(false);
   const [color, setColor] = useState('#ef4444');
   const [lineWidth, setLineWidth] = useState(3);
-  const [mode, setMode] = useState<'draw' | 'erase' | 'pan'>('draw');
+  const [mode, setMode] = useState<'draw' | 'rect' | 'erase' | 'pan'>('draw');
   const [activePointerId, setActivePointerId] = useState<number | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -77,13 +77,19 @@ export default function AnnotationView({
     
     if (cw === 0 || ch === 0) return;
 
-    canvas.width = cw * dpr;
-    canvas.height = ch * dpr;
+    const targetWidth = Math.floor(cw * dpr);
+    const targetHeight = Math.floor(ch * dpr);
+
+    if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+    }
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    ctx.scale(dpr, dpr);
     
+    ctx.resetTransform();
+    ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, cw, ch);
     
     ctx.lineCap = 'round';
@@ -93,17 +99,54 @@ export default function AnnotationView({
     
     for (const line of allLines) {
       if (line.points.length === 0) continue;
-      ctx.beginPath();
-      ctx.strokeStyle = line.color;
-      ctx.lineWidth = line.width;
       
-      const first = line.points[0];
-      ctx.moveTo(first.x * cw, first.y * ch);
-      for (let i = 1; i < line.points.length; i++) {
-         const p = line.points[i];
-         ctx.lineTo(p.x * cw, p.y * ch);
+      if (line.isRect) {
+        if (line.points.length < 2) continue;
+        const start = line.points[0];
+        const end = line.points[line.points.length - 1];
+        ctx.beginPath();
+        ctx.strokeStyle = line.color;
+        ctx.lineWidth = line.width;
+        // Draw a clean rectangle outline
+        ctx.strokeRect(
+          start.x * cw,
+          start.y * ch,
+          (end.x - start.x) * cw,
+          (end.y - start.y) * ch
+        );
+      } else {
+        // Look for valid pressure events to decide if it's dynamic styling
+        const hasPressure = line.points.some(p => p.pressure !== undefined && p.pressure > 0 && p.pressure !== 1 && p.pressure !== 0.5);
+        
+        if (hasPressure && line.points.length > 1) {
+          // Dynamic stroke style based on stylus pressure
+          for (let i = 1; i < line.points.length; i++) {
+            const prev = line.points[i - 1];
+            const curr = line.points[i];
+            ctx.beginPath();
+            ctx.moveTo(prev.x * cw, prev.y * ch);
+            ctx.lineTo(curr.x * cw, curr.y * ch);
+            
+            ctx.strokeStyle = line.color;
+            const p = curr.pressure !== undefined ? curr.pressure : 1;
+            // Map stylus pressure to width variation (0.4x - 1.8x base stroke width)
+            ctx.lineWidth = line.width * (0.4 + p * 1.4);
+            ctx.stroke();
+          }
+        } else {
+          // Fallback legacy fast rendering for standard touch or mouse inputs
+          ctx.beginPath();
+          ctx.strokeStyle = line.color;
+          ctx.lineWidth = line.width;
+          const first = line.points[0];
+          ctx.moveTo(first.x * cw, first.y * ch);
+          for (let i = 1; i < line.points.length; i++) {
+             const p = line.points[i];
+             ctx.lineTo(p.x * cw, p.y * ch);
+          }
+          ctx.stroke();
+        }
       }
-      ctx.stroke();
     }
   };
 
@@ -127,11 +170,18 @@ export default function AnnotationView({
     
     const coord = getCoordinates(e);
     if (!coord) return;
+
+    // Capture pen pressure if available
+    const initialPoint = {
+      ...coord,
+      pressure: e.pointerType === 'pen' ? e.pressure : 1.0
+    };
     
     setCurrentLine({
        color: mode === 'erase' ? 'rgba(0,0,0,1)' : color,
        width: mode === 'erase' ? 20 : lineWidth,
-       points: [coord]
+       points: [initialPoint],
+       isRect: mode === 'rect'
     });
   };
 
@@ -139,10 +189,23 @@ export default function AnnotationView({
     if (mode === 'pan' || !currentLine || e.pointerId !== activePointerId) return;
     const coord = getCoordinates(e);
     if (!coord) return;
-    setCurrentLine({
-      ...currentLine,
-      points: [...currentLine.points, coord]
-    });
+
+    const currentPoint = {
+      ...coord,
+      pressure: e.pointerType === 'pen' ? e.pressure : 1.0
+    };
+    
+    if (mode === 'rect') {
+      setCurrentLine({
+        ...currentLine,
+        points: [currentLine.points[0], currentPoint]
+      });
+    } else {
+      setCurrentLine({
+        ...currentLine,
+        points: [...currentLine.points, currentPoint]
+      });
+    }
   };
 
   const handlePointerUp = (e: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -398,44 +461,80 @@ export default function AnnotationView({
        ) : (
           <div className="flex-1 flex flex-col min-h-0 bg-slate-50 rounded-3xl overflow-hidden border border-slate-200/60 shadow-inner">
              {/* Toolbar */}
-             <div className="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-4 shrink-0">
-                <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-lg">
+             <div className="bg-white border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between p-3 gap-3 shrink-0">
+                <div className="flex flex-wrap items-center gap-2 bg-slate-100 p-1.5 rounded-xl self-start">
                    <button 
                      onClick={() => setMode('draw')}
-                     className={`p-2 rounded-md transition-colors ${mode === 'draw' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
-                     title="畫筆"
+                     className={`p-2 rounded-lg transition-colors flex items-center gap-1.5 ${mode === 'draw' ? 'bg-white shadow-sm text-blue-600 font-bold' : 'text-slate-500 hover:text-slate-700'}`}
+                     title="畫筆 (支援 Apple Pencil 壓感)"
                    >
                      <PenTool size={18} />
+                     <span className="text-xs">畫筆</span>
+                   </button>
+                   <button 
+                     onClick={() => setMode('rect')}
+                     className={`p-2 rounded-lg transition-colors flex items-center gap-1.5 ${mode === 'rect' ? 'bg-white shadow-sm text-blue-600 font-bold' : 'text-slate-500 hover:text-slate-700'}`}
+                     title="矩形標註框"
+                   >
+                     <Square size={18} />
+                     <span className="text-xs">矩形框</span>
                    </button>
                    <button 
                      onClick={() => setMode('erase')}
-                     className={`p-2 rounded-md transition-colors ${mode === 'erase' ? 'bg-white shadow-sm text-red-600' : 'text-slate-500 hover:text-slate-700'}`}
+                     className={`p-2 rounded-lg transition-colors flex items-center gap-1.5 ${mode === 'erase' ? 'bg-white shadow-sm text-red-600 font-bold' : 'text-slate-500 hover:text-slate-700'}`}
                      title="橡皮擦"
                    >
                      <Eraser size={18} />
+                     <span className="text-xs">橡皮擦</span>
                    </button>
                    <button 
                      onClick={() => setMode('pan')}
-                     className={`p-2 rounded-md transition-colors ${mode === 'pan' ? 'bg-white shadow-sm text-green-600' : 'text-slate-500 hover:text-slate-700'}`}
-                     title="移動位置/縮放"
+                     className={`p-2 rounded-lg transition-colors flex items-center gap-1.5 ${mode === 'pan' ? 'bg-white shadow-sm text-green-600 font-bold' : 'text-slate-500 hover:text-slate-700'}`}
+                     title="移動位置與手勢縮放"
                    >
                      <Hand size={18} />
+                     <span className="text-xs">移動縮放</span>
                    </button>
-                   <div className="w-px h-6 bg-slate-200 mx-2" />
+                   
+                   <div className="w-px h-6 bg-slate-200 mx-1 hidden sm:block" />
+                   
                    {/* Colors */}
-                   <div className="flex gap-2 px-2">
+                   <div className="flex gap-1.5 px-1.5 items-center">
                      {['#ef4444', '#3b82f6', '#22c55e', '#f59e0b', '#000000'].map(c => (
                         <button 
                           key={c}
-                          onClick={() => { setMode('draw'); setColor(c); }}
-                          className={`w-6 h-6 rounded-full border-2 transition-transform ${color === c && mode === 'draw' ? 'scale-110 border-white shadow-md' : 'border-transparent'}`}
+                          onClick={() => { 
+                            if (mode !== 'rect' && mode !== 'draw') {
+                              setMode('draw'); 
+                            }
+                            setColor(c); 
+                          }}
+                          className={`w-5 h-5 rounded-full border-2 transition-transform ${(color === c && (mode === 'draw' || mode === 'rect')) ? 'scale-110 border-white shadow-md' : 'border-transparent'}`}
                           style={{ backgroundColor: c }}
                         />
                      ))}
                    </div>
                 </div>
+
+                {/* Brush Size Slider */}
+                <div className="flex items-center gap-3 bg-slate-50 border border-slate-200/60 px-3 py-1.5 rounded-xl">
+                   <span className="text-xs font-bold text-slate-500 whitespace-nowrap">筆觸粗細: {lineWidth}px</span>
+                   <input 
+                     type="range" 
+                     min="1" 
+                     max="20" 
+                     value={lineWidth} 
+                     onChange={(e) => setLineWidth(Number(e.target.value))}
+                     className="w-24 md:w-32 h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                   />
+                   <div className="w-3 h-3 bg-slate-600 rounded-full transition-all shrink-0" style={{ transform: `scale(${lineWidth / 6})` }} />
+                </div>
                 
                 <div className="flex items-center gap-2">
+                   {/* Stylus pressure feedback badge */}
+                   <span className="hidden lg:inline-flex text-[11px] font-medium text-slate-400 mr-2 bg-slate-50 px-2.5 py-1 rounded-md border border-slate-200">
+                     ✨ 支援 Apple Pencil 壓感
+                   </span>
                    <button onClick={handleUndo} disabled={lines.length === 0} className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg disabled:opacity-40 transition-colors" title="復原">
                       <RotateCcw size={18} />
                    </button>
