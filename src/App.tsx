@@ -2429,7 +2429,7 @@ export default function App() {
               </div>
 
               {/* Persistent Right Sidebar for Discussion - Visible when space is selected */}
-              {selectedSpace && (
+              {selectedSpace && activeMainTab !== 'plan' && activeMainTab !== 'map' && activeMainTab !== 'report' && (
                 <div className="hidden lg:flex flex-col w-[380px] h-full space-y-6 overflow-hidden shrink-0">
                   {/* Note Input */}
                   <div className="bg-white border border-slate-200 rounded-3xl p-6 space-y-5 shadow-xl shadow-slate-200/20 flex flex-col shrink-0">

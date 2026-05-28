@@ -1,12 +1,12 @@
 import React, { useRef, useState, useEffect, PointerEvent as ReactPointerEvent } from 'react';
-import { UploadCloud, Save, RotateCcw, Trash2, PenTool, Eraser, Map, Loader2, Hand, Square } from 'lucide-react';
+import { UploadCloud, Save, RotateCcw, Trash2, PenTool, Eraser, Map, Loader2, Hand, Square, Type } from 'lucide-react';
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import imageCompression from 'browser-image-compression';
 import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
 
 interface Point { x: number; y: number; pressure?: number; }
-interface Line { color: string; width: number; points: Point[]; isRect?: boolean; }
+interface Line { color: string; width: number; points: Point[]; isRect?: boolean; isText?: boolean; text?: string; }
 
 export default function AnnotationView({
   floorId,
@@ -23,7 +23,7 @@ export default function AnnotationView({
   const [isSaving, setIsSaving] = useState(false);
   const [color, setColor] = useState('#ef4444');
   const [lineWidth, setLineWidth] = useState(3);
-  const [mode, setMode] = useState<'draw' | 'rect' | 'erase' | 'pan'>('draw');
+  const [mode, setMode] = useState<'draw' | 'rect' | 'text' | 'erase' | 'pan'>('draw');
   const [activePointerId, setActivePointerId] = useState<number | null>(null);
   
   const [showFloatingTools, setShowFloatingTools] = useState(false);
@@ -73,8 +73,9 @@ export default function AnnotationView({
     const canvas = canvasRef.current;
     if (!canvas) return;
     
-    // We update canvas real resolution to match its CSS dimensions
-    const dpr = window.devicePixelRatio || 1;
+    // We update canvas real resolution to match its CSS dimensions with high density
+    // Force at least 3x dpr to prevent pixelation on tablets / zooming
+    const dpr = Math.max(window.devicePixelRatio || 1, 3);
     const cw = canvas.clientWidth;
     const ch = canvas.clientHeight;
     
@@ -103,7 +104,13 @@ export default function AnnotationView({
     for (const line of allLines) {
       if (line.points.length === 0) continue;
       
-      if (line.isRect) {
+      if (line.isText) {
+        if (!line.text) continue;
+        const pt = line.points[0];
+        ctx.font = `bold ${Math.max(14, line.width * 5)}px sans-serif`;
+        ctx.fillStyle = line.color;
+        ctx.fillText(line.text, pt.x * cw, pt.y * ch);
+      } else if (line.isRect) {
         if (line.points.length < 2) continue;
         const start = line.points[0];
         const end = line.points[line.points.length - 1];
@@ -167,12 +174,33 @@ export default function AnnotationView({
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     if (activePointerId !== null) return;
     
+    const coord = getCoordinates(e);
+    if (!coord) return;
+
+    if (mode === 'text') {
+       e.preventDefault();
+       const text = window.prompt("請輸入標註文字:");
+       if (text && text.trim()) {
+           const newTextLine: Line = {
+               color,
+               width: lineWidth,
+               points: [coord],
+               isText: true,
+               text: text.trim()
+           };
+           setLines(prev => {
+             const newLines = [...prev, newTextLine];
+             autoSave(newLines);
+             return newLines;
+           });
+           redrawCanvas();
+       }
+       return;
+    }
+    
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
     setActivePointerId(e.pointerId);
-    
-    const coord = getCoordinates(e);
-    if (!coord) return;
 
     // Capture pen pressure if available
     const initialPoint = {
@@ -484,6 +512,14 @@ export default function AnnotationView({
                         <span className="text-xs hidden sm:inline">矩形</span>
                       </button>
                       <button 
+                        onClick={() => setMode('text')}
+                        className={`p-2 rounded-lg transition-colors flex items-center gap-1.5 ${mode === 'text' ? 'bg-white shadow-md text-blue-600 font-bold' : 'text-slate-500 hover:text-slate-700'}`}
+                        title="文字標註"
+                      >
+                        <Type size={18} />
+                        <span className="text-xs hidden sm:inline">文字</span>
+                      </button>
+                      <button 
                         onClick={() => setMode('erase')}
                         className={`p-2 rounded-lg transition-colors flex items-center gap-1.5 ${mode === 'erase' ? 'bg-white shadow-md text-red-600 font-bold' : 'text-slate-500 hover:text-slate-700'}`}
                         title="橡皮擦"
@@ -548,9 +584,14 @@ export default function AnnotationView({
              {/* Canvas Container */}
              <div className="flex-1 overflow-hidden bg-[#e5e5ea] relative">
                 <TransformWrapper
-                   panning={{ disabled: mode !== 'pan' }}
+                   limitToBounds={false}
+                   panning={{ 
+                      disabled: false,
+                      allowLeftClickPan: mode === 'pan',
+                      allowMiddleClickPan: true 
+                   }}
                    pinch={{ disabled: false, step: 2 }}
-                   wheel={{ step: 0.02 }}
+                   wheel={{ step: 0.005 }}
                    initialScale={1}
                    minScale={0.1}
                    maxScale={8}
