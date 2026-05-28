@@ -25,6 +25,9 @@ export default function AnnotationView({
   const [lineWidth, setLineWidth] = useState(3);
   const [mode, setMode] = useState<'draw' | 'rect' | 'erase' | 'pan'>('draw');
   const [activePointerId, setActivePointerId] = useState<number | null>(null);
+  
+  const [showFloatingTools, setShowFloatingTools] = useState(false);
+  const [floatingToolsPos, setFloatingToolsPos] = useState({ x: 0, y: 0 });
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -460,109 +463,108 @@ export default function AnnotationView({
           </div>
        ) : (
           <div className="flex-1 flex flex-col min-h-0 bg-slate-50 rounded-3xl overflow-hidden border border-slate-200/60 shadow-inner">
-             {/* Toolbar */}
-             <div className="bg-white border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between p-3 gap-3 shrink-0">
-                <div className="flex flex-wrap items-center gap-2 bg-slate-100 p-1.5 rounded-xl self-start">
-                   <button 
-                     onClick={() => setMode('draw')}
-                     className={`p-2 rounded-lg transition-colors flex items-center gap-1.5 ${mode === 'draw' ? 'bg-white shadow-sm text-blue-600 font-bold' : 'text-slate-500 hover:text-slate-700'}`}
-                     title="畫筆 (支援 Apple Pencil 壓感)"
-                   >
-                     <PenTool size={18} />
-                     <span className="text-xs">畫筆</span>
-                   </button>
-                   <button 
-                     onClick={() => setMode('rect')}
-                     className={`p-2 rounded-lg transition-colors flex items-center gap-1.5 ${mode === 'rect' ? 'bg-white shadow-sm text-blue-600 font-bold' : 'text-slate-500 hover:text-slate-700'}`}
-                     title="矩形標註框"
-                   >
-                     <Square size={18} />
-                     <span className="text-xs">矩形框</span>
-                   </button>
-                   <button 
-                     onClick={() => setMode('erase')}
-                     className={`p-2 rounded-lg transition-colors flex items-center gap-1.5 ${mode === 'erase' ? 'bg-white shadow-sm text-red-600 font-bold' : 'text-slate-500 hover:text-slate-700'}`}
-                     title="橡皮擦"
-                   >
-                     <Eraser size={18} />
-                     <span className="text-xs">橡皮擦</span>
-                   </button>
-                   <button 
-                     onClick={() => setMode('pan')}
-                     className={`p-2 rounded-lg transition-colors flex items-center gap-1.5 ${mode === 'pan' ? 'bg-white shadow-sm text-green-600 font-bold' : 'text-slate-500 hover:text-slate-700'}`}
-                     title="移動位置與手勢縮放"
-                   >
-                     <Hand size={18} />
-                     <span className="text-xs">移動縮放</span>
-                   </button>
-                   
-                   <div className="w-px h-6 bg-slate-200 mx-1 hidden sm:block" />
-                   
-                   {/* Colors */}
-                   <div className="flex gap-1.5 px-1.5 items-center">
-                     {['#ef4444', '#3b82f6', '#22c55e', '#f59e0b', '#000000'].map(c => (
-                        <button 
-                          key={c}
-                          onClick={() => { 
-                            if (mode !== 'rect' && mode !== 'draw') {
-                              setMode('draw'); 
-                            }
-                            setColor(c); 
-                          }}
-                          className={`w-5 h-5 rounded-full border-2 transition-transform ${(color === c && (mode === 'draw' || mode === 'rect')) ? 'scale-110 border-white shadow-md' : 'border-transparent'}`}
-                          style={{ backgroundColor: c }}
-                        />
-                     ))}
+             {/* Floating Minimal Toolbar */}
+             <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[60] bg-white/90 backdrop-blur-md border border-slate-200/60 flex flex-col md:flex-row shadow-xl rounded-2xl gap-2 w-[95%] md:w-auto p-2" style={{ pointerEvents: 'auto' }}>
+                 <div className="flex flex-wrap items-center justify-between w-full gap-2">
+                   <div className="flex flex-wrap items-center gap-1.5 bg-slate-100/80 p-1.5 rounded-xl">
+                      <button 
+                        onClick={() => setMode('draw')}
+                        className={`p-2 rounded-lg transition-colors flex items-center gap-1.5 ${mode === 'draw' ? 'bg-white shadow-md text-blue-600 font-bold' : 'text-slate-500 hover:text-slate-700'}`}
+                        title="畫筆 (支援 Apple Pencil 壓感)"
+                      >
+                        <PenTool size={18} />
+                        <span className="text-xs hidden sm:inline">畫筆</span>
+                      </button>
+                      <button 
+                        onClick={() => setMode('rect')}
+                        className={`p-2 rounded-lg transition-colors flex items-center gap-1.5 ${mode === 'rect' ? 'bg-white shadow-md text-blue-600 font-bold' : 'text-slate-500 hover:text-slate-700'}`}
+                        title="矩形標註框"
+                      >
+                        <Square size={18} />
+                        <span className="text-xs hidden sm:inline">矩形</span>
+                      </button>
+                      <button 
+                        onClick={() => setMode('erase')}
+                        className={`p-2 rounded-lg transition-colors flex items-center gap-1.5 ${mode === 'erase' ? 'bg-white shadow-md text-red-600 font-bold' : 'text-slate-500 hover:text-slate-700'}`}
+                        title="橡皮擦"
+                      >
+                        <Eraser size={18} />
+                        <span className="text-xs hidden sm:inline">橡皮擦</span>
+                      </button>
+                      <button 
+                        onClick={() => setMode('pan')}
+                        className={`p-2 rounded-lg transition-colors flex items-center gap-1.5 ${mode === 'pan' ? 'bg-white shadow-md text-green-600 font-bold' : 'text-slate-500 hover:text-slate-700'}`}
+                        title="移動位置與手勢縮放"
+                      >
+                        <Hand size={18} />
+                        <span className="text-xs hidden sm:inline">移動</span>
+                      </button>
+                      
+                      <div className="w-px h-6 bg-slate-300 mx-1 hidden sm:block" />
+                      
+                      {/* Colors */}
+                      <div className="flex gap-1.5 px-1 items-center">
+                        {['#ef4444', '#3b82f6', '#22c55e', '#f59e0b', '#000000'].map(c => (
+                           <button 
+                             key={c}
+                             onClick={() => { 
+                               if (mode !== 'rect' && mode !== 'draw') {
+                                 setMode('draw'); 
+                               }
+                               setColor(c); 
+                             }}
+                             className={`w-5 h-5 rounded-full border-2 transition-transform ${(color === c && (mode === 'draw' || mode === 'rect')) ? 'scale-110 border-white shadow-md' : 'border-transparent'}`}
+                             style={{ backgroundColor: c }}
+                           />
+                        ))}
+                      </div>
                    </div>
-                </div>
 
-                {/* Brush Size Slider */}
-                <div className="flex items-center gap-3 bg-slate-50 border border-slate-200/60 px-3 py-1.5 rounded-xl">
-                   <span className="text-xs font-bold text-slate-500 whitespace-nowrap">筆觸粗細: {lineWidth}px</span>
-                   <input 
-                     type="range" 
-                     min="1" 
-                     max="20" 
-                     value={lineWidth} 
-                     onChange={(e) => setLineWidth(Number(e.target.value))}
-                     className="w-24 md:w-32 h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                   />
-                   <div className="w-3 h-3 bg-slate-600 rounded-full transition-all shrink-0" style={{ transform: `scale(${lineWidth / 6})` }} />
-                </div>
-                
-                <div className="flex items-center gap-2">
-                   {/* Stylus pressure feedback badge */}
-                   <span className="hidden lg:inline-flex text-[11px] font-medium text-slate-400 mr-2 bg-slate-50 px-2.5 py-1 rounded-md border border-slate-200">
-                     ✨ 支援 Apple Pencil 壓感
-                   </span>
-                   <button onClick={handleUndo} disabled={lines.length === 0} className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg disabled:opacity-40 transition-colors" title="復原">
-                      <RotateCcw size={18} />
-                   </button>
-                   <button onClick={handleClear} disabled={lines.length === 0} className="p-2 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg disabled:opacity-40 transition-colors" title="清除全部">
-                      <Trash2 size={18} />
-                   </button>
-                </div>
-             </div>
+                   {/* Actions & Size */}
+                   <div className="flex items-center gap-2 justify-end px-2">
+                      <div className="flex items-center gap-2 bg-slate-50/80 border border-slate-200/60 px-2 py-1.5 rounded-xl hidden sm:flex">
+                         <span className="text-[10px] font-bold text-slate-500 whitespace-nowrap">粗細</span>
+                         <input 
+                           type="range" 
+                           min="1" 
+                           max="20" 
+                           value={lineWidth} 
+                           onChange={(e) => setLineWidth(Number(e.target.value))}
+                           className="w-20 md:w-24 h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                         />
+                      </div>
+                      <div className="flex items-center gap-1">
+                         <button onClick={handleUndo} disabled={lines.length === 0} className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50/50 rounded-lg disabled:opacity-40 transition-colors" title="復原">
+                            <RotateCcw size={16} />
+                         </button>
+                         <button onClick={handleClear} disabled={lines.length === 0} className="p-2 text-slate-500 hover:text-red-600 hover:bg-red-50/50 rounded-lg disabled:opacity-40 transition-colors" title="清除全部">
+                            <Trash2 size={16} />
+                         </button>
+                      </div>
+                   </div>
+                 </div>
+              </div>
              
              {/* Canvas Container */}
-             <div className="flex-1 overflow-hidden bg-[#e5e5ea]">
+             <div className="flex-1 overflow-hidden bg-[#e5e5ea] relative">
                 <TransformWrapper
                    panning={{ disabled: mode !== 'pan' }}
-                   pinch={{ disabled: false }}
-                   wheel={{ step: 0.1 }}
+                   pinch={{ disabled: false, step: 2 }}
+                   wheel={{ step: 0.02 }}
                    initialScale={1}
-                   minScale={0.5}
-                   maxScale={5}
+                   minScale={0.1}
+                   maxScale={8}
                 >
                    {({ zoomIn, zoomOut, resetTransform }) => (
+                     <>
                      <TransformComponent wrapperClass="w-full h-full" contentClass="w-full h-full flex items-center justify-center">
                         <div className="relative shadow-lg" style={{ display: 'inline-block' }}>
                            <img 
                              ref={imageRef}
                              src={projectMap.floorPlan2DUrl}
                              alt={`${floorId} Floor Plan`}
-                             className="pointer-events-none select-none block max-w-full max-h-full rounded-sm"
-                             style={{ objectFit: 'contain' }}
+                             className="pointer-events-none select-none block rounded-sm"
+                             style={{ objectFit: 'contain', width: '100vw', minWidth: '1500px', maxWidth: 'none', maxHeight: 'none' }}
                              onLoad={() => {
                                 // Wait a tick for layout to settle then redraw
                                 setTimeout(redrawCanvas, 50);
@@ -576,12 +578,51 @@ export default function AnnotationView({
                              onPointerUp={handlePointerUp}
                              onPointerOut={handlePointerUp}
                              onPointerCancel={handlePointerUp}
+                             onContextMenu={(e) => {
+                               e.preventDefault();
+                               setShowFloatingTools(true);
+                               setFloatingToolsPos({ x: e.clientX, y: e.clientY });
+                             }}
                              style={{ touchAction: 'none' }}
                            />
                         </div>
                      </TransformComponent>
+                     </>
                    )}
                 </TransformWrapper>
+
+                {/* Floating Apple Pencil Palette */}
+                {showFloatingTools && (
+                  <>
+                    <div className="fixed inset-0 z-[100]" onClick={() => setShowFloatingTools(false)} onContextMenu={(e) => { e.preventDefault(); setShowFloatingTools(false); }} />
+                    <div 
+                      className="fixed z-[101] bg-slate-900/90 backdrop-blur-md p-2 rounded-2xl shadow-2xl border border-white/10 flex flex-col gap-2 transform -translate-x-1/2 -translate-y-1/2 transition-all animate-in zoom-in-90 duration-200"
+                      style={{ left: floatingToolsPos.x, top: floatingToolsPos.y }}
+                    >
+                       <div className="flex gap-2">
+                         <button onClick={() => { setMode('draw'); setShowFloatingTools(false); }} className={`p-3 rounded-xl transition-all ${mode === 'draw' ? 'bg-blue-500 text-white' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}><PenTool size={24} /></button>
+                         <button onClick={() => { setMode('rect'); setShowFloatingTools(false); }} className={`p-3 rounded-xl transition-all ${mode === 'rect' ? 'bg-blue-500 text-white' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}><Square size={24} /></button>
+                         <button onClick={() => { setMode('erase'); setShowFloatingTools(false); }} className={`p-3 rounded-xl transition-all ${mode === 'erase' ? 'bg-red-500 text-white' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}><Eraser size={24} /></button>
+                         <button onClick={() => { setMode('pan'); setShowFloatingTools(false); }} className={`p-3 rounded-xl transition-all ${mode === 'pan' ? 'bg-green-500 text-white' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`}><Hand size={24} /></button>
+                       </div>
+                       <div className="h-px w-full bg-white/10 my-1" />
+                       <div className="flex justify-between px-2 gap-2">
+                          {['#ef4444', '#3b82f6', '#22c55e', '#f59e0b', '#ffffff', '#000000'].map(c => (
+                             <button 
+                               key={c}
+                               onClick={() => { 
+                                 if (mode !== 'rect' && mode !== 'draw') setMode('draw');
+                                 setColor(c); 
+                                 setShowFloatingTools(false);
+                               }}
+                               className={`w-8 h-8 rounded-full border-2 transition-transform shadow-inner ${(color === c && (mode === 'draw' || mode === 'rect')) ? 'scale-110 border-white' : 'border-transparent'}`}
+                               style={{ backgroundColor: c }}
+                             />
+                          ))}
+                       </div>
+                    </div>
+                  </>
+                )}
              </div>
           </div>
        )}
