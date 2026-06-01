@@ -34,12 +34,12 @@ export default function AnnotationView({
 
   useEffect(() => {
     const handleGlobalPointerDown = (e: PointerEvent) => {
-      if (e.button === 1) {
+      if (e.pointerType === 'mouse' && e.button === 1) {
         setIsMiddleMouseDown(true);
       }
     };
     const handleGlobalPointerUp = (e: PointerEvent) => {
-      if (e.button === 1) {
+      if (e.pointerType === 'mouse' && e.button === 1) {
         setIsMiddleMouseDown(false);
       }
     };
@@ -214,6 +214,7 @@ export default function AnnotationView({
 
     if (mode === 'text') {
        e.preventDefault();
+       e.stopPropagation();
        const text = window.prompt("請輸入標註文字:");
        if (text && text.trim()) {
            const newTextLine: Line = {
@@ -234,6 +235,7 @@ export default function AnnotationView({
     }
     
     e.preventDefault();
+    e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     setActivePointerId(e.pointerId);
 
@@ -253,6 +255,10 @@ export default function AnnotationView({
 
   const handlePointerMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     if (mode === 'pan' || !currentLine || e.pointerId !== activePointerId) return;
+    
+    e.preventDefault();
+    e.stopPropagation();
+
     const coord = getCoordinates(e);
     if (!coord) return;
 
@@ -276,6 +282,10 @@ export default function AnnotationView({
 
   const handlePointerUp = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     if (mode === 'pan' || e.pointerId !== activePointerId) return;
+    
+    e.preventDefault();
+    e.stopPropagation();
+
     e.currentTarget.releasePointerCapture(e.pointerId);
     setActivePointerId(null);
     
