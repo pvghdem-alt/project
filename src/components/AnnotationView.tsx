@@ -29,6 +29,28 @@ export default function AnnotationView({
   const [showFloatingTools, setShowFloatingTools] = useState(false);
   const [floatingToolsPos, setFloatingToolsPos] = useState({ x: 0, y: 0 });
 
+  // Track middle mouse button state for context panning
+  const [isMiddleMouseDown, setIsMiddleMouseDown] = useState(false);
+
+  useEffect(() => {
+    const handleGlobalPointerDown = (e: PointerEvent) => {
+      if (e.button === 1) {
+        setIsMiddleMouseDown(true);
+      }
+    };
+    const handleGlobalPointerUp = (e: PointerEvent) => {
+      if (e.button === 1) {
+        setIsMiddleMouseDown(false);
+      }
+    };
+    window.addEventListener('pointerdown', handleGlobalPointerDown);
+    window.addEventListener('pointerup', handleGlobalPointerUp);
+    return () => {
+      window.removeEventListener('pointerdown', handleGlobalPointerDown);
+      window.removeEventListener('pointerup', handleGlobalPointerUp);
+    };
+  }, []);
+
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
@@ -145,14 +167,27 @@ export default function AnnotationView({
           }
         } else {
           // Fallback legacy fast rendering for standard touch or mouse inputs
+          // Render with smooth quadratic curves for maximum precision and smooth edges (no jagged corners)
           ctx.beginPath();
           ctx.strokeStyle = line.color;
           ctx.lineWidth = line.width;
-          const first = line.points[0];
-          ctx.moveTo(first.x * cw, first.y * ch);
-          for (let i = 1; i < line.points.length; i++) {
-             const p = line.points[i];
-             ctx.lineTo(p.x * cw, p.y * ch);
+          const points = line.points;
+          if (points.length > 2) {
+             ctx.moveTo(points[0].x * cw, points[0].y * ch);
+             let i;
+             for (i = 1; i < points.length - 1; i++) {
+                const xc = ((points[i].x + points[i + 1].x) / 2) * cw;
+                const yc = ((points[i].y + points[i + 1].y) / 2) * ch;
+                ctx.quadraticCurveTo(points[i].x * cw, points[i].y * ch, xc, yc);
+             }
+             // Draw the last segment
+             ctx.lineTo(points[i].x * cw, points[i].y * ch);
+          } else if (points.length === 2) {
+             ctx.moveTo(points[0].x * cw, points[0].y * ch);
+             ctx.lineTo(points[1].x * cw, points[1].y * ch);
+          } else if (points.length === 1) {
+             ctx.moveTo(points[0].x * cw, points[0].y * ch);
+             ctx.closePath();
           }
           ctx.stroke();
         }
@@ -586,7 +621,7 @@ export default function AnnotationView({
                 <TransformWrapper
                    limitToBounds={false}
                    panning={{ 
-                      disabled: false,
+                      disabled: !(mode === 'pan' || isMiddleMouseDown),
                       allowLeftClickPan: mode === 'pan',
                       allowMiddleClickPan: true 
                    }}
@@ -602,7 +637,7 @@ export default function AnnotationView({
                         <div className="relative shadow-lg" style={{ display: 'inline-block' }}>
                            <img 
                              ref={imageRef}
-                             src={projectMap.floorPlan2DUrl}
+                             src={projectMap.floorPlan2DUrl ? `${projectMap.floorPlan2DUrl}${projectMap.floorPlan2DUrl.includes('?') ? '&' : '?'}cb=tablet_high_res_v2` : ''}
                              alt={`${floorId} Floor Plan`}
                              className="pointer-events-none select-none block rounded-sm"
                              style={{ objectFit: 'contain', width: '100vw', minWidth: '1500px', maxWidth: 'none', maxHeight: 'none' }}
