@@ -215,6 +215,29 @@ export default function App() {
   const [customTopics, setCustomTopics] = useState<Topic[]>([]);
   const [showAddTopic, setShowAddTopic] = useState<{ open: boolean, type: 'space' | 'trade' }>({ open: false, type: 'space' });
   const [newTopicName, setNewTopicName] = useState('');
+  
+  const [pendingNoteCounts, setPendingNoteCounts] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    const q = query(
+      collection(db, 'notes'),
+      where('floor', '==', activeFloor),
+      where('status', '==', 'pending')
+    );
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const counts: Record<string, number> = {};
+      snapshot.docs.forEach(doc => {
+        const data = doc.data();
+        if (data.space) {
+          counts[data.space] = (counts[data.space] || 0) + 1;
+        }
+      });
+      setPendingNoteCounts(counts);
+    }, (error) => {
+      console.error('Error fetching pending counts:', error);
+    });
+    return () => unsubscribe();
+  }, [activeFloor]);
 
   // API Key state
   const [apiKey, setApiKey] = useState('');
@@ -1921,6 +1944,7 @@ export default function App() {
                  active={selectedSpace === topic.name} 
                  onClick={() => { setSelectedSpace(topic.name); if (activeMainTab === 'report') setActiveMainTab('discussion'); }}
                  collapsed={!sidebarOpen}
+                 badgeCount={pendingNoteCounts[topic.name] || 0}
                  
                   onDoubleClick={(isSidebarEditing && user && !isNursingDept && (!topic.isDefault || user)) ? () => { setEditingTopicId(topic.id); setTopicEditName(topic.name); } : undefined}
                  isEditing={editingTopicId === topic.id}
@@ -2001,6 +2025,7 @@ export default function App() {
                    active={selectedSpace === topic.name} 
                    onClick={() => { setSelectedSpace(topic.name); if (activeMainTab === 'report') setActiveMainTab('discussion'); }}
                    collapsed={!sidebarOpen}
+                   badgeCount={pendingNoteCounts[topic.name] || 0}
                    user={isSidebarEditing && user && !isNursingDept ? user : null}
                    onDoubleClick={(isSidebarEditing && user && !isNursingDept && (!topic.isDefault || user)) ? () => { setEditingTopicId(topic.id); setTopicEditName(topic.name); } : undefined}
                    isEditing={editingTopicId === topic.id}
