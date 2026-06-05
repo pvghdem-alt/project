@@ -1847,7 +1847,7 @@ export default function App() {
                        icon={<MapIcon size={20} />} 
                        label={map.name} 
                        active={activeFloor === map.id} 
-                       onClick={() => { setActiveFloor(map.id); setSidebarMode('space'); if (activeMainTab === 'report') setActiveMainTab('discussion'); }}
+                       onClick={() => { setActiveFloor(map.id); setSidebarMode('space'); if (activeMainTab === 'report' || activeMainTab === 'plan') setActiveMainTab('discussion'); }}
                        collapsed={!sidebarOpen}
                        onDelete={isSidebarEditing && user && !isNursingDept ? () => handleDeleteFloor(map.id, map.name) : undefined}
                        user={isSidebarEditing && user && !isNursingDept ? user : null}
@@ -1872,7 +1872,7 @@ export default function App() {
                 </div>
                 
                 <button 
-                  onClick={() => { setSidebarMode('trade'); if (activeMainTab === 'report') setActiveMainTab('discussion'); }}
+                  onClick={() => { setSidebarMode('trade'); if (activeMainTab === 'report' || activeMainTab === 'plan') setActiveMainTab('discussion'); }}
                   className={`w-full flex items-center gap-3 p-4 rounded-2xl bg-white border border-slate-200 shadow-sm hover:shadow-md hover:border-blue-300 transition-all ${!sidebarOpen && 'justify-center'}`}
                 >
                   <ClipboardList size={24} className="text-blue-500" />
@@ -1934,6 +1934,20 @@ export default function App() {
                </div>
              )}
 
+             <div className="mb-2 space-y-1">
+               <NavItem 
+                 icon={<MapIcon size={20} />} 
+                 label="樓層全區平面圖標註" 
+                 active={selectedSpace === '__FULL_FLOOR_PLAN__' && activeMainTab === 'plan'} 
+                 onClick={() => { 
+                   setSelectedSpace('__FULL_FLOOR_PLAN__'); 
+                   setActiveMainTab('plan');
+                   setSidebarOpen(false);
+                 }}
+                 collapsed={!sidebarOpen}
+               />
+             </div>
+
              <Reorder.Group axis="y" values={customTopics.filter(t => (t.type === 'space' || !t.type) && (t.isDefault || t.floorId === activeFloor || t.floorId === 'global'))} onReorder={handleReorderTopics} className="space-y-1">
                 {customTopics.filter(t => (t.type === 'space' || !t.type) && (t.isDefault || t.floorId === activeFloor || t.floorId === 'global')).map((topic) => (
                   <Reorder.Item key={topic.id} value={topic} dragListener={!!user && !isNursingDept && isSidebarEditing}>
@@ -1942,7 +1956,7 @@ export default function App() {
                  icon={<Layout size={20} />} 
                  label={topic.name} 
                  active={selectedSpace === topic.name} 
-                 onClick={() => { setSelectedSpace(topic.name); if (activeMainTab === 'report') setActiveMainTab('discussion'); }}
+                 onClick={() => { setSelectedSpace(topic.name); if (activeMainTab === 'report' || activeMainTab === 'plan') setActiveMainTab('discussion'); }}
                  collapsed={!sidebarOpen}
                  badgeCount={pendingNoteCounts[topic.name] || 0}
                  
@@ -2023,7 +2037,7 @@ export default function App() {
                    icon={<ClipboardList size={20} />} 
                    label={topic.name} 
                    active={selectedSpace === topic.name} 
-                   onClick={() => { setSelectedSpace(topic.name); if (activeMainTab === 'report') setActiveMainTab('discussion'); }}
+                   onClick={() => { setSelectedSpace(topic.name); if (activeMainTab === 'report' || activeMainTab === 'plan') setActiveMainTab('discussion'); }}
                    collapsed={!sidebarOpen}
                    badgeCount={pendingNoteCounts[topic.name] || 0}
                    user={isSidebarEditing && user && !isNursingDept ? user : null}
@@ -2146,7 +2160,7 @@ export default function App() {
             </AnimatePresence>
 
             {/* Tab Navigation */}
-            {activeMainTab !== 'report' && (
+            {activeMainTab !== 'report' && selectedSpace !== '__FULL_FLOOR_PLAN__' && (
               <div className="flex items-center justify-between mb-4 shrink-0">
                  <div className="flex p-1 bg-slate-200/50 rounded-xl backdrop-blur-sm border border-slate-200 shadow-sm">
                     <button 
@@ -2181,17 +2195,6 @@ export default function App() {
                     >
                       <MapIcon size={16} />
                       配置圖
-                    </button>
-                    <button 
-                      onClick={() => setActiveMainTab('plan')}
-                      className={`flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold transition-all duration-300 ${
-                        activeMainTab === 'plan' 
-                          ? 'bg-white text-blue-600 shadow-lg' 
-                          : 'text-slate-500 hover:text-slate-700'
-                      }`}
-                    >
-                      <PenTool size={16} />
-                      平面圖註記
                     </button>
                  </div>
                  
@@ -2266,7 +2269,7 @@ export default function App() {
                             <h4 className="text-xs font-black text-blue-600 uppercase tracking-widest mb-1">
                               {activeMainTab === 'photos' ? '空間視覺參考' : activeMainTab === 'plan' ? '平面圖標註' : '空間細部規範'}
                             </h4>
-                            <h3 className="text-3xl font-black text-slate-900 tracking-tight">{selectedSpace}</h3>
+                            <h3 className="text-3xl font-black text-slate-900 tracking-tight">{selectedSpace === '__FULL_FLOOR_PLAN__' ? '樓層全區平面圖' : selectedSpace}</h3>
                           </div>
                           <div className="flex items-center gap-2">
                             {activeMainTab === 'discussion' && user && !isNursingDept && (

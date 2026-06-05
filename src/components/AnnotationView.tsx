@@ -1,12 +1,13 @@
 import React, { useRef, useState, useEffect, PointerEvent as ReactPointerEvent } from 'react';
-import { UploadCloud, Save, RotateCcw, Trash2, PenTool, Eraser, Map, Loader2, Hand, Square, Type } from 'lucide-react';
+import { UploadCloud, Save, RotateCcw, Trash2, PenTool, Eraser, Map, Loader2, Hand, Square, Type, Layers, Check, Plus, Eye, EyeOff, MoreHorizontal } from 'lucide-react';
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import imageCompression from 'browser-image-compression';
 import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
 
+interface Layer { id: string; name: string; visible: boolean; }
 interface Point { x: number; y: number; pressure?: number; }
-interface Line { color: string; width: number; points: Point[]; isRect?: boolean; isText?: boolean; text?: string; }
+interface Line { color: string; width: number; points: Point[]; isRect?: boolean; isText?: boolean; text?: string; layerId?: string; }
 
 export default function AnnotationView({
   floorId,
@@ -18,6 +19,10 @@ export default function AnnotationView({
   setNotification,
 }: any) {
   const [lines, setLines] = useState<Line[]>([]);
+  const [layers, setLayers] = useState<Layer[]>([{ id: 'default', name: '預設圖層', visible: true }]);
+  const [activeLayerId, setActiveLayerId] = useState<string>('default');
+  const [showLayerManager, setShowLayerManager] = useState(false);
+  const [newLayerName, setNewLayerName] = useState('');
   const [currentLine, setCurrentLine] = useState<Line | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -65,9 +70,19 @@ export default function AnnotationView({
         const docRef = doc(db, 'space_annotations', annotationDocId);
         const snap = await getDoc(docRef);
         if (snap.exists() && isMounted) {
-          setLines(snap.data().lines || []);
+          const data = snap.data();
+          setLines(data.lines || []);
+          if (data.layers && data.layers.length > 0) {
+            setLayers(data.layers);
+            setActiveLayerId(data.layers[0].id);
+          } else {
+            setLayers([{ id: 'default', name: '預設圖層', visible: true }]);
+            setActiveLayerId('default');
+          }
         } else if (isMounted) {
           setLines([]);
+          setLayers([{ id: 'default', name: '預設圖層', visible: true }]);
+          setActiveLayerId('default');
         }
       } catch (err) {
         console.error("Failed to load annotations:", err);
@@ -83,13 +98,13 @@ export default function AnnotationView({
   // Redraw when lines change or resize
   useEffect(() => {
     redrawCanvas();
-  }, [lines, currentLine, projectMap?.floorPlan2DUrl]);
+  }, [lines, layers, currentLine, projectMap?.floorPlan2DUrl]);
 
   useEffect(() => {
     const handleResize = () => redrawCanvas();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, [lines]);
+  }, [lines, layers]);
 
   const redrawCanvas = () => {
     const canvas = canvasRef.current;
@@ -122,9 +137,12 @@ export default function AnnotationView({
     ctx.lineJoin = 'round';
 
     const allLines = currentLine ? [...lines, currentLine] : lines;
+    const visibleLayerIds = new Set(layers.filter(l => l.visible).map(l => l.id));
     
     for (const line of allLines) {
       if (line.points.length === 0) continue;
+      const lineLayerId = line.layerId || 'default';
+      if (!visibleLayerIds.has(lineLayerId)) continue;
       
       if (line.isText) {
         if (!line.text) continue;
@@ -222,11 +240,12 @@ export default function AnnotationView({
                width: lineWidth,
                points: [coord],
                isText: true,
-               text: text.trim()
+               text: text.trim(),
+               layerId: activeLayerId
            };
            setLines(prev => {
              const newLines = [...prev, newTextLine];
-             autoSave(newLines);
+             autoSave(newLines, layers);
              return newLines;
            });
            redrawCanvas();
@@ -249,8 +268,25 @@ export default function AnnotationView({
        color: mode === 'erase' ? 'rgba(0,0,0,1)' : color,
        width: mode === 'erase' ? 20 : lineWidth,
        points: [initialPoint],
-       isRect: mode === 'rect'
+       isRect: mode === 'rect',
+       layerId: activeLayerId
     });
+  };
+
+  const toggleLayerVisibility = (id: string) => {
+    const updated = layers.map(l => l.id === id ? { ...l, visible: !l.visible } : l);
+    setLayers(updated);
+    autoSave(lines, updated);
+  };
+  
+  const handleAddLayer = () => {
+    if (!newLayerName.trim()) return;
+    const newLayer = { id: Date.now().toString(), name: newLayerName.trim(), visible: true };
+    const updated = [...layers, newLayer];
+    setLayers(updated);
+    setActiveLayerId(newLayer.id);
+    setNewLayerName('');
+    autoSave(lines, updated);
   };
 
   const handlePointerMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -297,7 +333,7 @@ export default function AnnotationView({
     } else {
        setLines(prev => {
          const newLines = [...prev, currentLine];
-         autoSave(newLines);
+         autoSave(newLines, layers);
          return newLines;
        });
        setCurrentLine(null);
@@ -305,9 +341,14 @@ export default function AnnotationView({
   };
 
   const handleErase = (eraseStroke: Line) => {
-    const newLines = lines.filter(line => !intersectLine(line, eraseStroke));
+    const visibleLayerIds = new Set(layers.filter(l => l.visible).map(l => l.id));
+    const newLines = lines.filter(line => {
+      // You cannot erase something from a hidden layer
+      if (!visibleLayerIds.has(line.layerId || 'default')) return true;
+      return !intersectLine(line, eraseStroke);
+    });
     setLines(newLines);
-    autoSave(newLines);
+    autoSave(newLines, layers);
   };
 
   const intersectLine = (l1: Line, l2: Line) => {
@@ -324,12 +365,12 @@ export default function AnnotationView({
     return false;
   };
 
-  const autoSave = async (updatedLines: Line[]) => {
+  const autoSave = async (updatedLines: Line[], updatedLayers?: Layer[]) => {
     if (!user) return;
     setIsSaving(true);
     try {
       const docRef = doc(db, 'space_annotations', annotationDocId);
-      await setDoc(docRef, { lines: updatedLines, floorId, space: selectedSpace, updatedAt: Date.now() }, { merge: true });
+      await setDoc(docRef, { lines: updatedLines, layers: updatedLayers || layers, floorId, space: selectedSpace, updatedAt: Date.now() }, { merge: true });
     } catch(e) {
       console.warn("Auto save failed", e);
     } finally {
@@ -341,14 +382,14 @@ export default function AnnotationView({
     if (lines.length === 0) return;
     const newLines = lines.slice(0, -1);
     setLines(newLines);
-    autoSave(newLines);
+    autoSave(newLines, layers);
   };
 
   const handleClear = () => {
-    const confirmed = window.confirm("確定要清空所有註記嗎？");
+    const confirmed = window.confirm("確定要清空所有圖層的所有註記嗎？");
     if (confirmed) {
       setLines([]);
-      autoSave([]);
+      autoSave([], layers);
     }
   };
 
@@ -526,7 +567,7 @@ export default function AnnotationView({
              <Map size={64} className="text-slate-200 mb-6" />
              <h3 className="text-xl font-bold text-slate-800 mb-2">{floorId} 尚未上傳平面圖</h3>
              <p className="text-sm text-slate-500 text-center max-w-sm mb-6">
-                上傳該樓層的底部平面圖後，您可以在圖面上使用畫筆為【{selectedSpace}】標註位置。此樓層的底圖只需上傳一次。
+                上傳該樓層的底部平面圖後，您可以在圖面上使用畫筆為【{selectedSpace === '__FULL_FLOOR_PLAN__' ? '全區' : selectedSpace}】標註位置。此樓層的底圖只需上傳一次。
              </p>
              <label className="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-md shadow-blue-500/20 transition-all cursor-pointer">
                 {isUploading ? <Loader2 size={16} className="animate-spin" /> : <UploadCloud size={16} />}
@@ -615,6 +656,14 @@ export default function AnnotationView({
                          />
                       </div>
                       <div className="flex items-center gap-1">
+                         <button 
+                           onClick={() => setShowLayerManager(!showLayerManager)}
+                           className={`p-2 rounded-lg transition-colors flex items-center gap-1.5 ${showLayerManager ? 'bg-blue-100 text-blue-700 font-bold shadow-inner' : 'text-slate-500 hover:text-blue-600 hover:bg-blue-50/50'}`}
+                           title="圖層管理"
+                         >
+                           <Layers size={16} />
+                           <span className="text-xs hidden sm:inline">圖層</span>
+                         </button>
                          <button onClick={handleUndo} disabled={lines.length === 0} className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50/50 rounded-lg disabled:opacity-40 transition-colors" title="復原">
                             <RotateCcw size={16} />
                          </button>
@@ -628,6 +677,70 @@ export default function AnnotationView({
              
              {/* Canvas Container */}
              <div className="flex-1 overflow-hidden bg-[#e5e5ea] relative">
+                
+                {/* Layer Management Panel */}
+                {showLayerManager && (
+                   <div className="absolute top-20 right-4 w-72 bg-white/95 backdrop-blur-xl border border-slate-200/80 rounded-2xl shadow-2xl z-[70] flex flex-col overflow-hidden">
+                      <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                         <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+                           <Layers size={16} className="text-blue-500" />
+                           圖層管理
+                         </h3>
+                         <span className="bg-slate-200 text-slate-600 text-[10px] px-2 py-0.5 rounded-full font-bold">{layers.length}</span>
+                      </div>
+                      
+                      <div className="p-3 bg-slate-50/30">
+                         <div className="flex gap-2">
+                            <input 
+                              type="text" 
+                              value={newLayerName}
+                              onChange={e => setNewLayerName(e.target.value)}
+                              onKeyDown={e => e.key === 'Enter' && handleAddLayer()}
+                              placeholder="新增圖層名稱..."
+                              className="flex-1 text-sm px-3 py-1.5 border border-slate-200 rounded-lg focus:border-blue-500 outline-none"
+                            />
+                            <button 
+                              onClick={handleAddLayer}
+                              disabled={!newLayerName.trim()}
+                              className="p-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 disabled:opacity-50 rounded-lg border border-blue-100 transition-colors"
+                            >
+                               <Plus size={18} />
+                            </button>
+                         </div>
+                      </div>
+                      
+                      <div className="max-h-60 overflow-y-auto p-2 space-y-1">
+                         {layers.map(layer => {
+                            const isSelected = activeLayerId === layer.id;
+                            return (
+                               <div 
+                                 key={layer.id} 
+                                 className={`flex items-center justify-between p-2 rounded-xl transition-all ${isSelected ? 'bg-blue-50 border border-blue-100 shadow-sm' : 'hover:bg-slate-50 border border-transparent'}`}
+                               >
+                                  <div 
+                                    className="flex items-center gap-2 flex-1 cursor-pointer"
+                                    onClick={() => { setActiveLayerId(layer.id); redrawCanvas(); }}
+                                  >
+                                     <div className={`w-3 h-3 rounded-full flex-shrink-0 ${isSelected ? 'bg-blue-500' : 'bg-slate-200'}`} />
+                                     <span className={`text-sm font-medium ${isSelected ? 'text-blue-700' : 'text-slate-600'}`}>
+                                       {layer.name}
+                                     </span>
+                                  </div>
+                                  
+                                  <button 
+                                    onClick={(e) => { e.stopPropagation(); toggleLayerVisibility(layer.id); }}
+                                    className={`p-1.5 rounded-md transition-colors ${layer.visible ? 'text-slate-500 hover:text-slate-800 hover:bg-slate-200' : 'text-slate-300 hover:text-slate-500'}`}
+                                    title={layer.visible ? '隱藏圖層' : '顯示圖層'}
+                                  >
+                                    {layer.visible ? <Eye size={16} /> : <EyeOff size={16} />}
+                                  </button>
+                               </div>
+                            );
+                         })}
+                      </div>
+                   </div>
+                )}
+
                 <TransformWrapper
                    limitToBounds={false}
                    panning={{ 
