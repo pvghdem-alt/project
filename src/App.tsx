@@ -42,7 +42,8 @@ import {
   Camera,
   UploadCloud,
   Settings,
-  PenTool
+  PenTool,
+  Lock
 } from 'lucide-react';
 import { motion, AnimatePresence, Reorder } from 'motion/react';
 import Markdown from 'react-markdown';
@@ -189,8 +190,8 @@ function getRequirementsForSpace(reqs: RequirementCategory[], space: string | nu
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
   const isNursingDept = user?.email === 'user@ptvgh.gov.tw';
-  const [showLoginModal, setShowLoginModal] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [isLoginLoading, setIsLoginLoading] = useState(false);
@@ -342,6 +343,7 @@ export default function App() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
+      setIsAuthLoading(false);
       if (!u) {
         setDriveAccessToken(null);
       }
@@ -959,7 +961,6 @@ export default function App() {
     setIsLoginLoading(true);
     try {
       await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
-      setShowLoginModal(false);
       setNotification({ message: '登入成功！', type: 'success' });
       setTimeout(() => setNotification(null), 2000);
     } catch (err: any) {
@@ -1794,6 +1795,92 @@ export default function App() {
 
   const toggleSidebar = () => setSidebarOpen(!sidebarOpen);
 
+  if (isAuthLoading) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-slate-50">
+        <Loader2 size={32} className="animate-spin text-blue-500" />
+      </div>
+    );
+  }
+
+  const isAuthorizedAdmin = user?.email === 'jason2134@gmail.com';
+  const isAuthorizedViewer = user?.email === 'user@ptvgh.gov.tw';
+  const isAuthorized = isAuthorizedAdmin || isAuthorizedViewer;
+
+  if (!user || !isAuthorized) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-slate-50 relative overflow-hidden">
+        {/* Background Decorative Elements */}
+        <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none z-0">
+          <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-blue-100 blur-[100px] opacity-60"></div>
+          <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full bg-emerald-100 blur-[100px] opacity-60"></div>
+        </div>
+
+        <div className="w-full max-w-md bg-white/80 backdrop-blur-xl rounded-3xl shadow-2xl overflow-hidden p-8 space-y-8 relative z-10 border border-slate-100">
+           <div className="text-center space-y-2">
+             <div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center text-white mx-auto shadow-xl shadow-blue-500/20 mb-4">
+               {user && !isAuthorized ? <Lock size={32} /> : <Building2 size={32} />}
+             </div>
+             <h2 className="text-2xl font-black text-slate-900 tracking-tight">龍泉分院改建工程平台</h2>
+             <p className="text-sm font-bold text-slate-500 uppercase tracking-widest">
+               {user && !isAuthorized ? "目前無權限存取此系統" : "請輸入您的帳號密碼登入"}
+             </p>
+           </div>
+           
+           {!user ? (
+             <form onSubmit={handleLogin} className="space-y-5">
+               <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">電子郵件 Email</label>
+                  <input 
+                    type="email" 
+                    value={loginEmail}
+                    onChange={e => setLoginEmail(e.target.value)}
+                    className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none font-medium"
+                    placeholder="name@example.com"
+                    required
+                  />
+               </div>
+               <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">密碼 Password</label>
+                  <input 
+                    type="password" 
+                    value={loginPassword}
+                    onChange={e => setLoginPassword(e.target.value)}
+                    className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none font-medium"
+                    placeholder="••••••••"
+                    required
+                  />
+               </div>
+               
+               <button 
+                 type="submit" 
+                 disabled={isLoginLoading}
+                 className="w-full flex items-center justify-center gap-2 py-3.5 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-bold rounded-xl shadow-lg shadow-blue-600/20 transition-all mt-4"
+               >
+                 {isLoginLoading ? <Loader2 size={18} className="animate-spin" /> : <LogIn size={18} />}
+                 {isLoginLoading ? '登入中...' : '登入系統'}
+               </button>
+             </form>
+           ) : (
+             <div className="space-y-6">
+               <div className="p-4 bg-red-50 text-red-700 rounded-xl border border-red-100 text-center text-sm font-medium">
+                 您登入的帳號 ({user.email}) 不在此系統的授權名單中。
+               </div>
+               <button 
+                 type="button"
+                 onClick={handleLogout}
+                 className="w-full flex items-center justify-center gap-2 py-3.5 px-4 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-lg shadow-slate-900/20 transition-all"
+               >
+                 <LogOut size={18} />
+                 切換帳號登出
+               </button>
+             </div>
+           )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-screen bg-brand-bg font-sans text-slate-900 overflow-hidden">
       {/* Sidebar Navigation */}
@@ -2079,32 +2166,22 @@ export default function App() {
             {sidebarOpen && <span className="text-sm font-bold uppercase tracking-widest">{isApiKeySet ? 'API Key 已設定' : '設定 API Key'}</span>}
           </button>
           
-          {user ? (
-            <div className={`p-3 rounded-xl bg-blue-50 border border-blue-100 ${!sidebarOpen && 'flex justify-center'}`}>
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white font-bold group relative cursor-pointer" onClick={handleLogout}>
-                   <UserIcon size={16} />
-                   <div className="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                     <LogOut size={14} />
-                   </div>
-                </div>
-                {sidebarOpen && (
-                  <div className="overflow-hidden flex-1">
-                    <p className="text-xs font-bold truncate text-slate-900">{user.email}</p>
-                    <button onClick={handleLogout} className="text-[10px] text-blue-600 font-bold uppercase tracking-widest hover:underline text-left block">登出帳號</button>
-                  </div>
-                )}
+          <div className={`p-3 rounded-xl bg-blue-50 border border-blue-100 ${!sidebarOpen && 'flex justify-center'}`}>
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white font-bold group relative cursor-pointer" onClick={handleLogout}>
+                 <UserIcon size={16} />
+                 <div className="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                   <LogOut size={14} />
+                 </div>
               </div>
+              {sidebarOpen && (
+                <div className="overflow-hidden flex-1">
+                  <p className="text-xs font-bold truncate text-slate-900">{user.email}</p>
+                  <button onClick={handleLogout} className="text-[10px] text-blue-600 font-bold uppercase tracking-widest hover:underline text-left block">登出帳號</button>
+                </div>
+              )}
             </div>
-          ) : (
-            <button 
-              onClick={() => setShowLoginModal(true)}
-              className={`w-full flex items-center gap-3 p-3 rounded-xl bg-blue-600 text-white shadow-lg shadow-blue-500/20 hover:bg-blue-700 transition-all ${!sidebarOpen && 'justify-center'}`}
-            >
-              <LogIn size={18} />
-              {sidebarOpen && <span className="text-sm font-bold uppercase tracking-widest">登入協作模式</span>}
-            </button>
-          )}
+          </div>
         </div>
       </motion.aside>
 
@@ -3194,60 +3271,7 @@ export default function App() {
           </div>
         )}
 
-        {showLoginModal && (
-          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowLoginModal(false)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-md" />
-            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 20 }} className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden p-8 space-y-8">
-               <div className="text-center space-y-2">
-                 <div className="w-16 h-16 bg-blue-500 rounded-2xl flex items-center justify-center text-white mx-auto shadow-xl shadow-blue-500/20">
-                   <Building2 size={32} />
-                 </div>
-                 <h3 className="text-2xl font-black text-slate-900">協作者登入</h3>
-                 <p className="text-sm text-slate-500 font-medium">請使用指定的 Email 帳號進入編輯模式</p>
-               </div>
-               
-               <form onSubmit={handleLogin} className="space-y-6">
-                 <div className="space-y-2">
-                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">帳號 (Email)</label>
-                   <input 
-                     required
-                     type="email"
-                     value={loginEmail}
-                     onChange={(e) => setLoginEmail(e.target.value)}
-                     placeholder="your@email.com"
-                     className="w-full h-14 px-5 bg-slate-50 border border-slate-200 rounded-2xl text-slate-900 font-bold focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/5 outline-none transition-all placeholder:text-slate-300"
-                   />
-                 </div>
-                 <div className="space-y-2">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">密碼 (Password)</label>
-                    <input 
-                      required
-                      type="password"
-                      value={loginPassword}
-                      onChange={(e) => setLoginPassword(e.target.value)}
-                      placeholder="••••••••"
-                      className="w-full h-14 px-5 bg-slate-50 border border-slate-200 rounded-2xl text-slate-900 font-bold focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/5 outline-none transition-all placeholder:text-slate-300"
-                    />
-                 </div>
-                 <button 
-                   type="submit"
-                   disabled={isLoginLoading}
-                   className="w-full py-5 bg-blue-600 text-white rounded-2xl font-black shadow-xl shadow-blue-500/30 hover:bg-blue-700 transition-all flex items-center justify-center gap-3 disabled:opacity-50"
-                 >
-                   {isLoginLoading ? <Loader2 size={20} className="animate-spin" /> : <ShieldAlert size={20} />}
-                   授權並進入系統
-                 </button>
-               </form>
-               
-               <button 
-                 onClick={() => setShowLoginModal(false)}
-                 className="w-full py-2 text-xs font-bold text-slate-400 hover:text-slate-600 transition-colors uppercase tracking-widest"
-               >
-                 暫不登入 (僅限檢視)
-               </button>
-            </motion.div>
-          </div>
-        )}
+
 
         {showAuthErrorModal && (
           <div className="fixed inset-0 z-[130] flex items-center justify-center p-4">
